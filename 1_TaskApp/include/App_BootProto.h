@@ -10,6 +10,8 @@
 
 #include <stdint.h>
 
+/* ==================== 1. 协议常量 ==================== */
+
 /*------------------------------------------------------------------------------
 * 原始工程协议参数（v102：Task_InterComm.h / Task_InterComm_NormalFunc.h）
 *------------------------------------------------------------------------------*/
@@ -22,6 +24,8 @@
 
 #define BOOT_PROTO_SILENCE_TICKS    (4U)        /* 4×1ms=4ms 无字节 → 断帧（原 35×100us=3.5ms，RX 轮询移 1ms 任务后按 1ms 拍取整） */
 #define BOOT_PROTO_READY_TICKS_1MS  (2000U)     /* FlashReady 持续 2000×1ms=2s 确认后才跳转（对齐 v102：原 PVBoostFlashMode 在 SuperTask 10ms 节拍内数 200×10ms=2s） */
+
+/* ==================== 2. 类型定义 ==================== */
 
 typedef struct
 {
@@ -46,9 +50,13 @@ typedef struct
     /* 诊断计数 */
     volatile uint16_t u16FrameCnt;          /* 收到合法帧数 */
     volatile uint16_t u16UpdateCmdCnt;      /* 烧录命令帧数 */
-} BootProtoCtrl_t;
+} ST_BOOT_PROTO_CTRL;
 
-extern BootProtoCtrl_t g_BootProto;
+/* ==================== 3. 变量声明 ==================== */
+
+extern ST_BOOT_PROTO_CTRL stBootProto;
+
+/* ==================== 4. 公共 API ==================== */
 
 void BootProto_Init(void);          /* 清状态机/标志（main 调一次） */
 void BootProto_Task_Rx(void);       /* 静默断帧检查（1ms；必须排在 UartProto_RxTask 喂字节之前） */

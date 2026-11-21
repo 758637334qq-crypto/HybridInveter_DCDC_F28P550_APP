@@ -7,25 +7,33 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+/* ==================== 1. 常量 ==================== */
+
 #define CUSTOM_UART_TX_RING_SIZE    (32U)   /* 可用 31 字节，留一格区分满/空 */
 #define CUSTOM_UART_TX_RING_MASK    (CUSTOM_UART_TX_RING_SIZE - 1U)   /* 指针 & MASK 绕回 */
+
+/* ==================== 2. 类型定义 ==================== */
 
 /* volatile：head/tail/ring/计数跨任务共享，禁止编译器缓存 */
 typedef struct
 {
     /* TX：Write() 写 head，1ms 任务读 tail；C2000 最小寻址 16 位，只存低 8 位 */
-    volatile uint16_t txRing[CUSTOM_UART_TX_RING_SIZE];
+    volatile uint16_t u16TxRing[CUSTOM_UART_TX_RING_SIZE];
 
-    volatile uint16_t txHead;
+    volatile uint16_t u16TxHead;
 
-    volatile uint16_t txTail;
+    volatile uint16_t u16TxTail;
 
     volatile uint16_t u16RxHwOvfCnt;   /* 硬件 RX FIFO 溢出次数 */
     volatile uint16_t u16RxHwErrCnt;   /* SCIRXST 错误次数 */
 
-} CustomUartCtrl_t;
+} ST_CUSTOM_UART_CTRL;
 
-extern CustomUartCtrl_t g_CustomUart;
+/* ==================== 3. 变量声明 ==================== */
+
+extern ST_CUSTOM_UART_CTRL stCustomUart;
+
+/* ==================== 4. 公共 API ==================== */
 
 void CustomUart_Init(void);   /* 上电调一次 */
 

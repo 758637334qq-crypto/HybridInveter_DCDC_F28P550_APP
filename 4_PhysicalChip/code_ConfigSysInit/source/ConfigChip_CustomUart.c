@@ -7,14 +7,14 @@
 
 #define UART_HW_BASE    (SCIB_BASE)   /* ARM 通讯：SCIB */
 
-CustomUartCtrl_t g_CustomUart;
+ST_CUSTOM_UART_CTRL stCustomUart;
 
 /* 上电调一次：SWRESET 期间配 8-N-1 / 波特率 / 增强 FIFO */
 void CustomUart_Init(void)
 {
     uint16_t baudDiv;
 
-    memset(&g_CustomUart, 0, sizeof(g_CustomUart));
+    memset(&stCustomUart, 0, sizeof(stCustomUart));
 
     baudDiv = (uint16_t)((DEVICE_LSPCLK_FREQ / (115200UL * 8UL)) - 1UL);   /* BRR = LSPCLK / (115200 × 8) − 1 */
 
@@ -65,8 +65,8 @@ bool CustomUart_Write(const uint16_t *data, uint16_t len)
 
     if ((len > 0U) && (data != 0))
     {
-        head = g_CustomUart.txHead;
-        tail = g_CustomUart.txTail;
+        head = stCustomUart.u16TxHead;
+        tail = stCustomUart.u16TxTail;
 
         /* 剩余空间 = (tail − head − 1) & MASK；留一格区分满/空 */
         free_space = (uint16_t)((tail - head - 1U) & CUSTOM_UART_TX_RING_MASK);
@@ -75,13 +75,13 @@ bool CustomUart_Write(const uint16_t *data, uint16_t len)
         {
             for (i = 0U; i < len; i++)
             {
-                g_CustomUart.txRing[head] = data[i] & 0xFFU;   /* UART 只发低 8 位 */
+                stCustomUart.u16TxRing[head] = data[i] & 0xFFU;   /* UART 只发低 8 位 */
 
                 head = (uint16_t)((head + 1U) & CUSTOM_UART_TX_RING_MASK);   /* & MASK 走到末尾绕回 */
             }
 
             /* 全部写完才更新 head，1ms 任务此时才看得见 */
-            g_CustomUart.txHead = head;
+            stCustomUart.u16TxHead = head;
             ok = true;
         }
     }
@@ -102,13 +102,13 @@ bool CustomUart_RxService(void)
     needRecover = false;
     if (SCI_getOverflowStatus(UART_HW_BASE) != false)
     {
-        g_CustomUart.u16RxHwOvfCnt++;
+        stCustomUart.u16RxHwOvfCnt++;
         needRecover = true;
     }
     rxStatus = SCI_getRxStatus(UART_HW_BASE);
     if ((rxStatus & SCI_RXSTATUS_ERROR) != 0U)
     {
-        g_CustomUart.u16RxHwErrCnt++;
+        stCustomUart.u16RxHwErrCnt++;
         needRecover = true;
     }
     if (needRecover != false)
@@ -151,18 +151,18 @@ void CustomUart_Task_1ms(void)
     {
         hw_free = (uint16_t)(16U - hw_used);
 
-        tail = g_CustomUart.txTail;
+        tail = stCustomUart.u16TxTail;
 
-        while ((hw_free > 0U) && (g_CustomUart.txHead != tail))
+        while ((hw_free > 0U) && (stCustomUart.u16TxHead != tail))
         {
-            SCI_writeCharNonBlocking(UART_HW_BASE, g_CustomUart.txRing[tail]);
+            SCI_writeCharNonBlocking(UART_HW_BASE, stCustomUart.u16TxRing[tail]);
 
             tail = (uint16_t)((tail + 1U) & CUSTOM_UART_TX_RING_MASK);
 
             hw_free--;
         }
 
-        g_CustomUart.txTail = tail;   /* 搬完一次性释放空间给 Write() */
+        stCustomUart.u16TxTail = tail;   /* 搬完一次性释放空间给 Write() */
     }
 }
 
@@ -172,6 +172,6 @@ void CustomUart_Task_1ms(void)
  * 调用侧需留出该裕量 */
 bool CustomUart_TxIdle(void)
 {
-    return ((g_CustomUart.txHead == g_CustomUart.txTail) &&
+    return ((stCustomUart.u16TxHead == stCustomUart.u16TxTail) &&
             (SCI_getTxFIFOStatus(UART_HW_BASE) == SCI_FIFO_TX0));
 }

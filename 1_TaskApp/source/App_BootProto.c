@@ -28,7 +28,7 @@ extern uint16_t FromAppRequestFlag;
 #define BOOT_ST_WAIT_FUNC           (1U)                        /* 等功能码 */
 #define BOOT_ST_BODY                (2U)                        /* 收帧体（定长） */
 
-BootProtoCtrl_t g_BootProto;
+ST_BOOT_PROTO_CTRL stBootProto;
 
 /*------------------------------------------------------------------------------
 * FUNCION :  BootProto_Init()
@@ -36,7 +36,7 @@ BootProtoCtrl_t g_BootProto;
 *------------------------------------------------------------------------------*/
 void BootProto_Init(void)
 {
-    memset(&g_BootProto, 0, sizeof(g_BootProto));
+    memset(&stBootProto, 0, sizeof(stBootProto));
 }
 
 /*------------------------------------------------------------------------------
@@ -47,13 +47,13 @@ void BootProto_Init(void)
 *------------------------------------------------------------------------------*/
 void BootProto_Task_Rx(void)
 {
-    g_BootProto.u16SilenceCnt++;
-    if (g_BootProto.u16SilenceCnt > BOOT_PROTO_SILENCE_TICKS)
+    stBootProto.u16SilenceCnt++;
+    if (stBootProto.u16SilenceCnt > BOOT_PROTO_SILENCE_TICKS)
     {
-        if (g_BootProto.u16State != BOOT_ST_WAIT_ADDR)
+        if (stBootProto.u16State != BOOT_ST_WAIT_ADDR)
         {
-            g_BootProto.u16State  = BOOT_ST_WAIT_ADDR;
-            g_BootProto.u16ByteIdx = 0U;
+            stBootProto.u16State  = BOOT_ST_WAIT_ADDR;
+            stBootProto.u16ByteIdx = 0U;
         }
     }
 }
@@ -68,36 +68,36 @@ void BootProto_RxByte(uint16_t byte)
 {
     uint16_t cmd;
 
-    g_BootProto.u16SilenceCnt = 0U;   /* 有新字节：刷新静默计时 */
+    stBootProto.u16SilenceCnt = 0U;   /* 有新字节：刷新静默计时 */
 
-    switch (g_BootProto.u16State)
+    switch (stBootProto.u16State)
     {
             case BOOT_ST_WAIT_ADDR:                     /* 等从机地址 0xD2 */
                 if (byte == BOOT_PROTO_SLAVE_ADDR)
                 {
-                    g_BootProto.u16ByteIdx = 1U;
-                    g_BootProto.u16State  = BOOT_ST_WAIT_FUNC;
+                    stBootProto.u16ByteIdx = 1U;
+                    stBootProto.u16State  = BOOT_ST_WAIT_FUNC;
                 }
                 break;
 
             case BOOT_ST_WAIT_FUNC:                     /* 等功能码 0x01 */
                 if (byte == BOOT_PROTO_FUNC_CODE)
                 {
-                    g_BootProto.u16ByteIdx++;
-                    g_BootProto.u16State = BOOT_ST_BODY;
+                    stBootProto.u16ByteIdx++;
+                    stBootProto.u16State = BOOT_ST_BODY;
                 }
                 else
                 {
                     /* 功能码不符：回到等地址；若该字节恰为 0xD2 则直接续接（原始同款处理） */
-                    g_BootProto.u16ByteIdx = 0U;
+                    stBootProto.u16ByteIdx = 0U;
                     if (byte == BOOT_PROTO_SLAVE_ADDR)
                     {
-                        g_BootProto.u16ByteIdx = 1U;
-                        g_BootProto.u16State  = BOOT_ST_WAIT_FUNC;
+                        stBootProto.u16ByteIdx = 1U;
+                        stBootProto.u16State  = BOOT_ST_WAIT_FUNC;
                     }
                     else
                     {
-                        g_BootProto.u16State = BOOT_ST_WAIT_ADDR;
+                        stBootProto.u16State = BOOT_ST_WAIT_ADDR;
                     }
                 }
                 break;
@@ -105,53 +105,53 @@ void BootProto_RxByte(uint16_t byte)
             case BOOT_ST_BODY:                          /* 收帧体至 96 字节 */
             default:
                 /* 全帧只读取帧[9]：仅暂存该字节，其余只计数（原 u8Frame[96] 缓冲已删） */
-                if (g_BootProto.u16ByteIdx == BOOT_PROTO_CMD_FLASH_OFFS)
+                if (stBootProto.u16ByteIdx == BOOT_PROTO_CMD_FLASH_OFFS)
                 {
-                    g_BootProto.u8FlashCmd = (uint8_t)byte;
+                    stBootProto.u8FlashCmd = (uint8_t)byte;
                 }
-                g_BootProto.u16ByteIdx++;
+                stBootProto.u16ByteIdx++;
 
-                if (g_BootProto.u16ByteIdx >= BOOT_PROTO_FRAME_LEN)
+                if (stBootProto.u16ByteIdx >= BOOT_PROTO_FRAME_LEN)
                 {
-                    g_BootProto.u16FrameCnt++;
+                    stBootProto.u16FrameCnt++;
 
                     /* 帧[9] 在线烧录命令（原始 DealInterReceiveData 分支）。
                      * 原始协议无 CRC；与 AA55 协议共存时镜像流可能随机拼出假帧，
                      * 要求帧[9] 连续两帧一致才更新标志（对 ARM 周期广播仅延迟一帧）。 */
-                    cmd = (uint16_t)g_BootProto.u8FlashCmd;
+                    cmd = (uint16_t)stBootProto.u8FlashCmd;
 
-                    if (cmd == g_BootProto.u16LastCmd)
+                    if (cmd == stBootProto.u16LastCmd)
                     {
-                        g_BootProto.u16CmdRepeat++;
+                        stBootProto.u16CmdRepeat++;
                     }
                     else
                     {
-                        g_BootProto.u16LastCmd  = cmd;
-                        g_BootProto.u16CmdRepeat = 1U;
+                        stBootProto.u16LastCmd  = cmd;
+                        stBootProto.u16CmdRepeat = 1U;
                     }
 
-                    if (g_BootProto.u16CmdRepeat >= 2U)
+                    if (stBootProto.u16CmdRepeat >= 2U)
                     {
                         if (cmd == BOOT_PROTO_CMD_UPDATE)
                         {
-                            g_BootProto.u16FlashUpdateFlag = 1U;
-                            g_BootProto.u16FlashReady      = 1U;
-                            g_BootProto.u16UpdateCmdCnt++;
+                            stBootProto.u16FlashUpdateFlag = 1U;
+                            stBootProto.u16FlashReady      = 1U;
+                            stBootProto.u16UpdateCmdCnt++;
                         }
                         else if (cmd != 0U)
                         {
-                            g_BootProto.u16FlashUpdateFlag = 1U;
-                            g_BootProto.u16FlashReady      = 0U;
+                            stBootProto.u16FlashUpdateFlag = 1U;
+                            stBootProto.u16FlashReady      = 0U;
                         }
                         else
                         {
-                            g_BootProto.u16FlashUpdateFlag = 0U;
-                            g_BootProto.u16FlashReady      = 0U;
+                            stBootProto.u16FlashUpdateFlag = 0U;
+                            stBootProto.u16FlashReady      = 0U;
                         }
                     }
 
-                    g_BootProto.u16State  = BOOT_ST_WAIT_ADDR;
-                    g_BootProto.u16ByteIdx = 0U;
+                    stBootProto.u16State  = BOOT_ST_WAIT_ADDR;
+                    stBootProto.u16ByteIdx = 0U;
                 }
                 break;
     }
@@ -168,17 +168,17 @@ void BootProto_Task_1ms(void)
 {
     /* 进入升级态边沿：仅作立即生效的软强制（AQCSFRC 可被判向/故障翻转清除，
      * 不承担持续封波；持续封波依赖状态机停机路径的 OST 锁存与每拍 Seal） */
-    if ((g_BootProto.u16FlashUpdateFlag != 0U) && (g_BootProto.u16PwmDisabled == 0U))
+    if ((stBootProto.u16FlashUpdateFlag != 0U) && (stBootProto.u16PwmDisabled == 0U))
     {
         DAB_PWM_Stop();
-        g_BootProto.u16PwmDisabled = 1U;
+        stBootProto.u16PwmDisabled = 1U;
     }
 
-    if (g_BootProto.u16FlashReady != 0U)
+    if (stBootProto.u16FlashReady != 0U)
     {
-        g_BootProto.u16ReadyCnt++;
+        stBootProto.u16ReadyCnt++;
 
-        if (g_BootProto.u16ReadyCnt > BOOT_PROTO_READY_TICKS_1MS)
+        if (stBootProto.u16ReadyCnt > BOOT_PROTO_READY_TICKS_1MS)
         {
             DAB_PWM_Stop();     /* 跳转前兜底封波 */
 
@@ -192,6 +192,6 @@ void BootProto_Task_1ms(void)
     }
     else
     {
-        g_BootProto.u16ReadyCnt = 0U;       /* Ready 撤销：确认计数清零 */
+        stBootProto.u16ReadyCnt = 0U;       /* Ready 撤销：确认计数清零 */
     }
 }
