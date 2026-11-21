@@ -10,13 +10,22 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-/* ---- 帧格式（见 App_UartProto.c 文件头）---- */
+/* ---- 帧格式（见 App_UartProto.c 文件头）：帧头 0xAA 0x55；本机地址 0x01，广播 0xFF ---- */
 #define PROTOCOL_SOF1               (0xAAU)
 #define PROTOCOL_SOF2               (0x55U)
-#define PROTOCOL_MY_ADDR            (0x0AU)
-#define PROTOCOL_BROADCAST          (0x08U)
+#define PROTOCOL_MY_ADDR            (0x01U)
+#define PROTOCOL_BROADCAST          (0xFFU)
+/* BMS 下发 0x00~0x05，数据区均为 9 字节 */
 #define PROTOCOL_CMD_RUN_0          (0x00U)
+#define PROTOCOL_CMD_CAL_BUS12_1    (0x01U)
+#define PROTOCOL_CMD_CAL_PCS_I1_2   (0x02U)
+#define PROTOCOL_CMD_CAL_I2_ITOT_3  (0x03U)
+#define PROTOCOL_CMD_CAL_VBAT_IBAT_4 (0x04U)
 #define PROTOCOL_CMD_SET_PACK_BUS_5 (0x05U)
+
+/* 本机轮发上报 0x40~0x52 */
+#define PROTOCOL_CMD_TX_FIRST       (0x40U)
+#define PROTOCOL_CMD_TX_LAST        (0x52U)
 
 /* 收帧：定长 16 字节（SOF2+addr+cmd+len+9数据+CRC2），LEN 字节恒 9 */
 #define PROTOCOL_RX_FRAME_SIZE      (16U)

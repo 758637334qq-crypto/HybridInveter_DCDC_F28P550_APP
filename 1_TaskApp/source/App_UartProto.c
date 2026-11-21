@@ -21,11 +21,35 @@ typedef struct
     volatile uint16_t u16TxDropCnt;
 } UartProtoCtrl_t;
 
-/* BMS 侧暂存：仅保留有使用方的字段 */
+/* 0x01~0x04 校准帧，LEN=9：前 8 字节 k/b，最后 1 字节保留 */
 typedef struct
 {
+    uint16_t k1;
+    int16_t  b1;
+    uint16_t k2;
+    int16_t  b2;
+    uint16_t rsvd;
+} UartBmsCalFrame_t;
+
+/* 四组校准数据 */
+typedef struct
+{
+    UartBmsCalFrame_t bus12;
+    UartBmsCalFrame_t busPcsI1;
+    UartBmsCalFrame_t i2Itot;
+    UartBmsCalFrame_t vbatIbat;
+} UartBmsCal_t;
+
+/* BMS 侧暂存：协议有、固件暂无独立变量的量 */
+typedef struct
+{
+    uint16_t soc_dPct;    /* 0x00 Byte0~1：SOC 0.1% */
     uint16_t hotCmd;      /* 0x00 Byte7 bit1：加热控制，0=关 1=开 */
+    uint16_t phase;       /* 0x00 Byte7 bit5：相数选择，0=单相 1=三相（预留） */
+    uint16_t bmsMode;     /* 0x00 mode bit1：BMS 模式，0=正常 1=BMS 模式 */
+    uint16_t adiMode;     /* 0x00 mode bit3：校准模式，1=进入校准 */
     uint16_t PackSum;     /* 0x05：电池包总数 */
+    UartBmsCal_t cal;
 } UartBmsSide_t;
 
 /* 遥测映射行：命令码 + 4 个变量地址，NULL 填 0 */
@@ -275,6 +299,7 @@ static void Cmd00_Run(const uint16_t *d)
     uint16_t mode;
     uint16_t bmsAddr;
 
+    s_bms.soc_dPct = d[0];                 /* Byte0~1：SOC 0.1% */
     CfgParam.BatChgCurSet = d[1];
     CfgParam.BatDischgCurSet = d[2];
     bmsAddr = d[3] & 0xFFU;                /* Byte6：BMS 地址（仅本函数使用） */
@@ -302,20 +327,33 @@ static void Cmd00_Run(const uint16_t *d)
     s_bms.hotCmd          = (ctrl >> 1) & 0x01U;
     cmd.bit.ReCharForce   = (ctrl >> 2) & 0x03U;
     cmd.bit.standby       = (ctrl >> 4) & 0x01U;
+    s_bms.phase           = (ctrl >> 5) & 0x01U;   /* 预留：0单相 1三相 */
     cmd.bit.clearfaultcmd = (ctrl >> 6) & 0x01U;
     cmd.bit.ReCharDcdcOn  = ((ctrl >> 7) & 0x01U) ? 0U : 1U;   /* bit7 禁止放电：1 → 关放电使能 */
 
     /* 运行模式 mode（协议 4.1.2）：
      * bit0 TestCmd | bit1 BmsMode | bit2 bClearFault | bit3 bAdi，其余保留填 0 */
     cmd.bit.openTest = mode & 0x0001U;
+    s_bms.bmsMode    = (mode >> 1) & 0x0001U;
     if ((mode & 0x0004U) != 0U)   /* mode.bit2 清故障与 Byte7.bit6 任一为 1 即清 */
     {
         cmd.bit.clearfaultcmd = 1U;
     }
+    s_bms.adiMode       = (mode >> 3) & 0x0001U;
     CfgParam.SysCmd.all = cmd.all;   /* 单次 16 位写，原子生效 */
 
     /* 当拍同步 SysCmd，同帧 onoff=0+clear=1 时清故障能读到新 shutdown */
     SM_SyncSysCmd();
+}
+
+/* 校准帧：前 8 字节是 k/b，最后 1 字节保留。 */
+static void CmdCal_Store(const uint16_t *d, UartBmsCalFrame_t *dst)
+{
+    dst->k1   = d[0];
+    dst->b1   = (int16_t)d[1];
+    dst->k2   = d[2];
+    dst->b2   = (int16_t)d[3];
+    dst->rsvd = d[4];
 }
 
 /* 0x05 并联/母线设定，LEN=9：packSum | busVolSet_dV | busDischgCurSet_dA | openLoopDuty | 保留 */
@@ -337,13 +375,17 @@ uint16_t UartProto_GetHotCmd(void)
     return s_bms.hotCmd;
 }
 
-/* 只处理 0x00 与 0x05；0x01~0x04 校准帧数据无使用方，与其余命令一样静默丢弃。 */
+/* 0x00 运行控制 | 0x01~0x04 校准存储 | 0x05 并联/母线设定；其余命令静默丢弃 */
 static void UartProto_HandleCmd(uint16_t cmd, const uint16_t *data)
 {
     switch (cmd)
     {
-    case PROTOCOL_CMD_RUN_0:          Cmd00_Run(data);     break;
-    case PROTOCOL_CMD_SET_PACK_BUS_5: Cmd05_PackBus(data); break;
+    case PROTOCOL_CMD_RUN_0:           Cmd00_Run(data);                         break;
+    case PROTOCOL_CMD_CAL_BUS12_1:     CmdCal_Store(data, &s_bms.cal.bus12);    break;
+    case PROTOCOL_CMD_CAL_PCS_I1_2:    CmdCal_Store(data, &s_bms.cal.busPcsI1); break;
+    case PROTOCOL_CMD_CAL_I2_ITOT_3:   CmdCal_Store(data, &s_bms.cal.i2Itot);   break;
+    case PROTOCOL_CMD_CAL_VBAT_IBAT_4: CmdCal_Store(data, &s_bms.cal.vbatIbat);  break;
+    case PROTOCOL_CMD_SET_PACK_BUS_5:  Cmd05_PackBus(data);                      break;
     default: break;
     }
 }
@@ -390,9 +432,11 @@ static void UartProto_RxByte(uint16_t byte)
                    (uint16_t)((g_UartProto.rxFrameBuf[PROTOCOL_RX_FRAME_SIZE - 1U] & 0xFFU) << 8);
         addr = g_UartProto.rxFrameBuf[2] & 0xFFU;
         cmd  = g_UartProto.rxFrameBuf[3] & 0xFFU;
+        /* 本机/广播、CRC 正确且命令有处理动作（0x00~0x05 均有对应分支）才执行；
+         * 其余命令静默丢弃，不占任何资源 */
         if (((addr == PROTOCOL_MY_ADDR) || (addr == PROTOCOL_BROADCAST)) &&
             (calc_crc == recv_crc) &&
-            ((cmd == PROTOCOL_CMD_RUN_0) || (cmd == PROTOCOL_CMD_SET_PACK_BUS_5)))
+            (cmd <= PROTOCOL_CMD_SET_PACK_BUS_5))
         {
             /* 数据区 9 字节（一字节一格）→ 小端拼 5 个 16 位字，奇数尾字高字节补 0 */
             for (i = 0U; i < (uint16_t)((PROTOCOL_BMS_PAYLOAD_LEN - 1U) / 2U); i++)
