@@ -18,16 +18,10 @@
 
 /* BMS 下发 0x00~0x05，数据区均为 9 字节 */
 #define PROTOCOL_BMS_PAYLOAD_LEN     (9U)
+/* BMS 完整帧恒 7+9=16 字（LEN 入口钉死 9），RX 全路径按此定长 */
+#define PROTOCOL_RX_FRAME_SIZE       (PROTOCOL_BMS_PAYLOAD_LEN + 7U)
 #define PROTOCOL_CMD_RUN_0           0
-#define PROTOCOL_CMD_CAL_BUS12_1     1
-#define PROTOCOL_CMD_CAL_PCS_I1_2    2
-#define PROTOCOL_CMD_CAL_I2_ITOT_3   3
-#define PROTOCOL_CMD_CAL_VBAT_IBAT_4 4
 #define PROTOCOL_CMD_SET_PACK_BUS_5  5
-
-/* 本机轮发上报 0x40~0x52 */
-#define PROTOCOL_CMD_TX_FIRST      (0x40U)
-#define PROTOCOL_CMD_TX_LAST       (0x52U)
 
 /* 帧队列 4 格，& MASK 绕回（容量须为 2 的幂） */
 #define UART_PROTO_RX_SLOT_NUM     (4U)
@@ -45,25 +39,6 @@ typedef enum
     eUartRxBody
 } teUartRxState;
 
-/* 0x01~0x04 校准帧，LEN=9 */
-typedef struct
-{
-    uint16_t k1;
-    int16_t  b1;
-    uint16_t k2;
-    int16_t  b2;
-    uint16_t rsvd;
-} UartBmsCalFrame_t;
-
-/* 四组校准数据 */
-typedef struct
-{
-    UartBmsCalFrame_t bus12;
-    UartBmsCalFrame_t busPcsI1;
-    UartBmsCalFrame_t i2Itot;
-    UartBmsCalFrame_t vbatIbat;
-} UartBmsCal_t;
-
 /* 0x05 并联/母线设定帧，LEN=9 */
 typedef struct
 {
@@ -74,17 +49,12 @@ typedef struct
     uint16_t rsvd;
 } UartBmsBusFrame_t;
 
-/* BMS 侧暂存：协议有、固件暂无独立变量的量 */
+/* BMS 侧暂存：仅保留有使用方的字段（soc/相数/模式/校准数据无读取端，已删） */
 typedef struct
 {
-    uint16_t soc_dPct;
-    uint16_t bmsAddr;
+    uint16_t bmsAddr;     /* 0x00 Byte6：BMS 地址（变更分址） */
     uint16_t hotCmd;      /* 0x00 Byte7 bit1：加热控制，0=关 1=开 */
-    uint16_t phase;       /* 0x00 Byte7 bit5：相数选择，0=单相 1=三相（预留） */
-    uint16_t bmsMode;     /* 0x00 mode bit1：BMS 模式，0=正常 1=BMS 模式 */
-    uint16_t adiMode;     /* 0x00 mode bit3：校准模式，1=进入校准 */
-    uint16_t PackSum;
-    UartBmsCal_t cal;
+    uint16_t PackSum;     /* 0x05：电池包总数 */
 } UartBmsSide_t;
 
 /* 遥测映射行：命令码 + 4 个变量地址，NULL 填 0 */
@@ -97,13 +67,12 @@ typedef struct
 /* 协议总状态块；跨任务共享成员一律 volatile */
 typedef struct
 {
-    uint16_t      rxFrameBuf[PROTOCOL_FRAME_SIZE];   /* 一字节一格，只存低 8 位 */
+    uint16_t      rxFrameBuf[PROTOCOL_RX_FRAME_SIZE];   /* 一字节一格，只存低 8 位（恒 16 字） */
     uint16_t      u16RxFramePos;
     teUartRxState eRxState;
     volatile uint32_t u32LastRxByteTick;
 
-    volatile uint16_t rxFrameQueue[UART_PROTO_RX_SLOT_NUM][PROTOCOL_FRAME_SIZE];   /* 完整帧队列：1ms 写 / 5ms 读 */
-    volatile uint16_t rxFrameLen[UART_PROTO_RX_SLOT_NUM];
+    volatile uint16_t rxFrameQueue[UART_PROTO_RX_SLOT_NUM][PROTOCOL_RX_FRAME_SIZE];   /* 完整帧队列（恒 16 字）：1ms 写 / 5ms 读 */
     volatile uint16_t u16RxWritePos;
     volatile uint16_t u16RxReadPos;
     volatile uint16_t u16RxFrameDropCnt;   /* 帧队列满被丢弃的帧数（诊断用） */

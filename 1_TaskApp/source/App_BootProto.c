@@ -89,7 +89,6 @@ void BootProto_Task_Rx(void)
             case BOOT_ST_WAIT_ADDR:                     /* 等从机地址 0xD2 */
                 if (byte == BOOT_PROTO_SLAVE_ADDR)
                 {
-                    g_BootProto.u8Frame[0] = (uint8_t)byte;
                     g_BootProto.u16ByteIdx = 1U;
                     g_BootProto.u16State  = BOOT_ST_WAIT_FUNC;
                 }
@@ -98,7 +97,6 @@ void BootProto_Task_Rx(void)
             case BOOT_ST_WAIT_FUNC:                     /* 等功能码 0x01 */
                 if (byte == BOOT_PROTO_FUNC_CODE)
                 {
-                    g_BootProto.u8Frame[g_BootProto.u16ByteIdx] = (uint8_t)byte;
                     g_BootProto.u16ByteIdx++;
                     g_BootProto.u16State = BOOT_ST_BODY;
                 }
@@ -108,7 +106,6 @@ void BootProto_Task_Rx(void)
                     g_BootProto.u16ByteIdx = 0U;
                     if (byte == BOOT_PROTO_SLAVE_ADDR)
                     {
-                        g_BootProto.u8Frame[0] = (uint8_t)byte;
                         g_BootProto.u16ByteIdx = 1U;
                         g_BootProto.u16State  = BOOT_ST_WAIT_FUNC;
                     }
@@ -121,7 +118,11 @@ void BootProto_Task_Rx(void)
 
             case BOOT_ST_BODY:                          /* 收帧体至 96 字节 */
             default:
-                g_BootProto.u8Frame[g_BootProto.u16ByteIdx] = (uint8_t)byte;
+                /* 全帧只读取帧[9]：仅暂存该字节，其余只计数（原 u8Frame[96] 缓冲已删） */
+                if (g_BootProto.u16ByteIdx == BOOT_PROTO_CMD_FLASH_OFFS)
+                {
+                    g_BootProto.u8FlashCmd = (uint8_t)byte;
+                }
                 g_BootProto.u16ByteIdx++;
 
                 if (g_BootProto.u16ByteIdx >= BOOT_PROTO_FRAME_LEN)
@@ -131,7 +132,7 @@ void BootProto_Task_Rx(void)
                     /* 帧[9] 在线烧录命令（原始 DealInterReceiveData 分支）。
                      * 原始协议无 CRC；与 AA55 协议共存时镜像流可能随机拼出假帧，
                      * 要求帧[9] 连续两帧一致才更新标志（对 ARM 周期广播仅延迟一帧）。 */
-                    cmd = (uint16_t)g_BootProto.u8Frame[BOOT_PROTO_CMD_FLASH_OFFS];
+                    cmd = (uint16_t)g_BootProto.u8FlashCmd;
 
                     if (cmd == g_BootProto.u16LastCmd)
                     {

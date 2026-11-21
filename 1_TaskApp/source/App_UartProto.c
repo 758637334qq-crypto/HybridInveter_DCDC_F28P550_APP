@@ -245,7 +245,6 @@ static void Cmd00_Run(const uint16_t *d)
     uint16_t ctrl;
     uint16_t mode;
 
-    s_bms.soc_dPct = d[0];
     CfgParam.BatChgCurSet = d[1];
     CfgParam.BatDischgCurSet = d[2];
     s_bms.bmsAddr = d[3] & 0xFFU;          /* Byte6：BMS 地址 */
@@ -273,33 +272,20 @@ static void Cmd00_Run(const uint16_t *d)
     s_bms.hotCmd          = (ctrl >> 1) & 0x01U;
     cmd.bit.ReCharForce   = (ctrl >> 2) & 0x03U;
     cmd.bit.standby       = (ctrl >> 4) & 0x01U;
-    s_bms.phase           = (ctrl >> 5) & 0x01U;   /* 预留：0单相 1三相 */
     cmd.bit.clearfaultcmd = (ctrl >> 6) & 0x01U;
     cmd.bit.ReCharDcdcOn  = ((ctrl >> 7) & 0x01U) ? 0U : 1U;   /* bit7 禁止放电：1 → 关放电使能 */
 
     /* 运行模式 mode（协议 4.1.2）：
      * bit0 TestCmd | bit1 BmsMode | bit2 bClearFault | bit3 bAdi，其余保留填 0 */
     cmd.bit.openTest = mode & 0x0001U;
-    s_bms.bmsMode    = (mode >> 1) & 0x0001U;
     if ((mode & 0x0004U) != 0U)   /* mode.bit2 清故障与 Byte7.bit6 任一为 1 即清 */
     {
         cmd.bit.clearfaultcmd = 1U;
     }
-    s_bms.adiMode       = (mode >> 3) & 0x0001U;
     CfgParam.SysCmd.all = cmd.all;   /* 单次 16 位写，原子生效 */
 
     /* 当拍同步 SysCmd，同帧 onoff=0+clear=1 时清故障能读到新 shutdown */
     SM_SyncSysCmd();
-}
-
-/* 校准帧：前 8 字节是 k/b，最后 1 字节保留。 */
-static void CmdCal_Store(const uint16_t *d, UartBmsCalFrame_t *dst)
-{
-    dst->k1   = d[0];
-    dst->b1   = (int16_t)d[1];
-    dst->k2   = d[2];
-    dst->b2   = (int16_t)d[3];
-    dst->rsvd = d[4];
 }
 
 /* 0x05 并联/母线设定，LEN=9 */
@@ -323,23 +309,19 @@ uint16_t UartProto_GetHotCmd(void)
     return s_bms.hotCmd;
 }
 
-/* 只处理 0x00~0x05，其余命令静默丢弃。 */
+/* 只处理 0x00 与 0x05；0x01~0x04 校准帧数据无使用方，与其余命令一样静默丢弃。 */
 static void UartProto_HandleCmd(uint16_t cmd, const uint16_t *data)
 {
     switch (cmd)
     {
-    case PROTOCOL_CMD_RUN_0:           Cmd00_Run(data);                         break;
-    case PROTOCOL_CMD_CAL_BUS12_1:     CmdCal_Store(data, &s_bms.cal.bus12);    break;
-    case PROTOCOL_CMD_CAL_PCS_I1_2:    CmdCal_Store(data, &s_bms.cal.busPcsI1); break;
-    case PROTOCOL_CMD_CAL_I2_ITOT_3:   CmdCal_Store(data, &s_bms.cal.i2Itot);   break;
-    case PROTOCOL_CMD_CAL_VBAT_IBAT_4: CmdCal_Store(data, &s_bms.cal.vbatIbat);  break;
-    case PROTOCOL_CMD_SET_PACK_BUS_5:  Cmd05_PackBus(data);                     break;
+    case PROTOCOL_CMD_RUN_0:          Cmd00_Run(data);     break;
+    case PROTOCOL_CMD_SET_PACK_BUS_5: Cmd05_PackBus(data); break;
     default: break;
     }
 }
 
 /* 1ms 写帧队列；满则丢最旧帧保最新命令 */
-static void UartProto_PushFrame(const uint16_t *pFrame, uint16_t len)
+static void UartProto_PushFrame(const uint16_t *pFrame)
 {
     uint16_t wp = g_UartProto.u16RxWritePos;
     uint16_t np = (uint16_t)((wp + 1U) & UART_PROTO_RX_SLOT_MASK);
@@ -358,11 +340,10 @@ static void UartProto_PushFrame(const uint16_t *pFrame, uint16_t len)
         }
     }
 
-    for (i = 0U; i < len; i++)
+    for (i = 0U; i < PROTOCOL_RX_FRAME_SIZE; i++)
     {
         g_UartProto.rxFrameQueue[wp][i] = pFrame[i];
     }
-    g_UartProto.rxFrameLen[wp] = len;
     g_UartProto.u16RxWritePos  = np;
 }
 
@@ -370,13 +351,11 @@ static void UartProto_PushFrame(const uint16_t *pFrame, uint16_t len)
 static bool UartProto_PopFrame(uint16_t *pBuf)
 {
     uint16_t rp = g_UartProto.u16RxReadPos;
-    uint16_t len;
     uint16_t i;
 
     if (rp == g_UartProto.u16RxWritePos) { return false; }
 
-    len = g_UartProto.rxFrameLen[rp];
-    for (i = 0U; i < len; i++)
+    for (i = 0U; i < PROTOCOL_RX_FRAME_SIZE; i++)
     {
         pBuf[i] = g_UartProto.rxFrameQueue[rp][i];
     }
@@ -388,7 +367,6 @@ static bool UartProto_PopFrame(uint16_t *pBuf)
 static void UartProto_RxByte(uint16_t byte)
 {
     uint16_t b = byte & 0xFFU;
-    uint16_t len;
     uint16_t addr;
     uint16_t calc_crc;
     uint16_t recv_crc;
@@ -443,19 +421,18 @@ static void UartProto_RxByte(uint16_t byte)
 
     case eUartRxBody:
         g_UartProto.rxFrameBuf[g_UartProto.u16RxFramePos++] = b;
-        len = 7U + PROTOCOL_BMS_PAYLOAD_LEN;
-        /* 收齐入队，状态机复位 */
-        if (g_UartProto.u16RxFramePos >= len)
+        /* 收齐 16 字入队，状态机复位 */
+        if (g_UartProto.u16RxFramePos >= PROTOCOL_RX_FRAME_SIZE)
         {
             /* 本机/广播且 CRC 正确的帧才占用队列槽位。 */
-            calc_crc = Fast_CRC16(g_UartProto.rxFrameBuf, (uint16_t)(len - 2U));
-            recv_crc = (uint16_t)(g_UartProto.rxFrameBuf[len - 2U] & 0xFFU) |
-                       (uint16_t)((g_UartProto.rxFrameBuf[len - 1U] & 0xFFU) << 8);
+            calc_crc = Fast_CRC16(g_UartProto.rxFrameBuf, (uint16_t)(PROTOCOL_RX_FRAME_SIZE - 2U));
+            recv_crc = (uint16_t)(g_UartProto.rxFrameBuf[PROTOCOL_RX_FRAME_SIZE - 2U] & 0xFFU) |
+                       (uint16_t)((g_UartProto.rxFrameBuf[PROTOCOL_RX_FRAME_SIZE - 1U] & 0xFFU) << 8);
             addr = g_UartProto.rxFrameBuf[2] & 0xFFU;
             if (((addr == PROTOCOL_MY_ADDR) || (addr == PROTOCOL_BROADCAST)) &&
                 (calc_crc == recv_crc))
             {
-                UartProto_PushFrame(g_UartProto.rxFrameBuf, len);
+                UartProto_PushFrame(g_UartProto.rxFrameBuf);
             }
 
             g_UartProto.eRxState = eUartRxWaitSof1;
@@ -518,7 +495,7 @@ static void UartProto_PackData(const uint16_t *src, uint16_t *dst, uint16_t byte
  * 队列为协作上下文单生产者单消费者，出队侧无需复检。 */
 void UartProto_Task_5ms(void)
 {
-    uint16_t buf[PROTOCOL_FRAME_SIZE];
+    uint16_t buf[PROTOCOL_RX_FRAME_SIZE];
     uint16_t data[(PROTOCOL_BMS_PAYLOAD_LEN + 1U) / 2U];
     uint16_t cmd;
     bool runCmdReceived = false;

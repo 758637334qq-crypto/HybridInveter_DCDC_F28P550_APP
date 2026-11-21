@@ -33,7 +33,7 @@ typedef struct
     volatile uint16_t u16State;             /* 0=等地址 1=等功能码 2=收帧体 */
     volatile uint16_t u16SilenceCnt;        /* 字节间隔计数（1ms 拍，>4ms 断帧） */
     volatile uint16_t u16ByteIdx;
-    uint8_t  u8Frame[BOOT_PROTO_FRAME_LEN]; /* 帧缓冲 */
+    uint8_t  u8FlashCmd;                    /* 暂存帧[9]（全帧唯一被读取的字节） */
 
     /* 1ms 跳转确认 */
     volatile uint16_t u16ReadyCnt;          /* FlashReady 持续计数（1ms 拍） */
