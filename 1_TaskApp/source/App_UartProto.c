@@ -47,20 +47,6 @@ static const uint16_t su16Crc16Table[256] =
     0x8201, 0x42C0, 0x4380, 0x8341, 0x4100, 0x81C1, 0x8081, 0x4040
 };
 
-/*------------------------------------------------------------------------------
-* 本文件静态函数原型（R0G 规则 8.1：静态函数原型集中于 .c 文件头）
-*------------------------------------------------------------------------------*/
-static uint16_t sFastCrc16(const uint16_t *buf, uint16_t len);
-static void     sPutU16(uint16_t *p, uint16_t v);
-static uint16_t sU32Word(const uint32_t *p, uint16_t hi);
-static uint16_t sF32ToU16(float v);
-static void     sCmd00Run(const uint16_t *d);
-static void     sCmdCalStore(const uint16_t *d, ST_UART_BMS_CAL_FRAME *dst);
-static void     sCmd05PackBus(const uint16_t *d);
-static void     sHandleCmd(uint16_t cmd, const uint16_t *data);
-static void     sRxByte(uint16_t byte);
-static void     sSendReport(void);
-
 /* 查表法：crc = (crc>>8) ^ table[(crc ^ byte) & 0xFF] */
 static uint16_t sFastCrc16(const uint16_t *buf, uint16_t len)
 {
