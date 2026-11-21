@@ -338,8 +338,9 @@ static void sHandleCmd(uint16_t cmd, const uint16_t *data)
     }
 }
 
-/* 收帧：单位置索引替代四态枚举——0=等 AA，1=等 55，2~4=头，5~15=数据+CRC；
- * 收齐 16 字后地址+CRC 过滤，通过则当拍执行（无队列、无溢出丢帧） */
+/* 收帧位置：0=等 AA，1=等 55，2~4=头，5~15=数据和 CRC。
+ * 收齐 16 字节并校验通过后，当拍执行有效命令。
+ * 长度或 CRC 错误时丢弃当前帧，从下一个字节重新寻找帧头。 */
 static void sRxByte(uint16_t byte)
 {
     uint16_t b = byte & 0xFFU;
