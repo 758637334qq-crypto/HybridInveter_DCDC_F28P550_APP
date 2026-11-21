@@ -1,0 +1,3 @@
+编辑器版本为Code Composer Studio 12.8.1
+
+驱动库版本为C2000Ware v5.05.00.00
