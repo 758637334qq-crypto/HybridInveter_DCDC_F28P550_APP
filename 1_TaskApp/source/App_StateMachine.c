@@ -480,7 +480,7 @@ static void UpdateShutdownFlag(void)
     SM_SyncSysCmd();                                        /* ① 刷新命令镜像 */
 
     if (FAULT_ANY() || CfgParam.SysCmd.bit.faultcmd ||      /* ② 停机三触发 */
-        (SysCmd.bit.shutdown == 0U))
+        (SysCmd.bit.shutdown == 0U)||g_BootProto.u16FlashUpdateFlag)
     {
         if (stFault.fast != 0U)                             /* ③ 故障快照(仅非零写) */
         {
