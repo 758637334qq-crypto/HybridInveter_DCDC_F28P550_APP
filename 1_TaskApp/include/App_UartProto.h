@@ -102,7 +102,7 @@ typedef struct
     teUartRxState eRxState;
     volatile uint32_t u32LastRxByteTick;
 
-    volatile uint16_t rxFrameQueue[UART_PROTO_RX_SLOT_NUM][PROTOCOL_FRAME_SIZE];   /* 完整帧队列：100us 写 / 5ms 读 */
+    volatile uint16_t rxFrameQueue[UART_PROTO_RX_SLOT_NUM][PROTOCOL_FRAME_SIZE];   /* 完整帧队列：1ms 写 / 5ms 读 */
     volatile uint16_t rxFrameLen[UART_PROTO_RX_SLOT_NUM];
     volatile uint16_t u16RxWritePos;
     volatile uint16_t u16RxReadPos;
@@ -121,7 +121,7 @@ extern UartProtoCtrl_t g_UartProto;
 
 void UartProto_Init(void);   /* 上电清零 */
 void UartProto_RxTask(void);         /* rxRing → 拼帧（1ms 任务）；须排在 CustomUart_Task_Rx 之后 */
-void UartProto_Task_5ms(void);   /* 取帧 → CRC → 执行命令 → 轮发遥测 */
+void UartProto_Task_5ms(void);   /* 取帧 → 执行命令 → 轮发遥测（地址/CRC 已在收帧入口过滤） */
 /* 组帧发送；false = TX 环空间不足 */
 bool UartProto_SendPacket(uint16_t addr, uint16_t cmd,
                           const uint16_t *payload, uint16_t len);

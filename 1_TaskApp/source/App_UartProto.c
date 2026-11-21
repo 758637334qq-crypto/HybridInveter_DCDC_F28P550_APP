@@ -1,6 +1,6 @@
 /* App_UartProto.c — P550 串口协议 V1.3
  * 帧：AA 55 | ADDR | CMD | LEN | DATA[N] | CRC_L CRC_H（小端 CRC16）
- * 100us 拼帧 → 5ms 校验/执行 → 每 20ms 轮发一帧遥测。
+ * 1ms 拼帧 → 5ms 执行（地址/CRC 在收帧入口过滤）→ 每 20ms 轮发一帧遥测。
  * 升级链路统一由 App_BootProto（ARM 0xD2 帧）处理，原 0x2F 握手已移除 */
 
 #include "Includes.h"
@@ -338,7 +338,7 @@ static void UartProto_HandleCmd(uint16_t cmd, const uint16_t *data)
     }
 }
 
-/* 100us 写帧队列；满则丢最旧帧保最新命令 */
+/* 1ms 写帧队列；满则丢最旧帧保最新命令 */
 static void UartProto_PushFrame(const uint16_t *pFrame, uint16_t len)
 {
     uint16_t wp = g_UartProto.u16RxWritePos;
@@ -367,7 +367,7 @@ static void UartProto_PushFrame(const uint16_t *pFrame, uint16_t len)
 }
 
 /* 5ms 读帧队列；空返回 false */
-static bool UartProto_PopFrame(uint16_t *pBuf, uint16_t *pLen)
+static bool UartProto_PopFrame(uint16_t *pBuf)
 {
     uint16_t rp = g_UartProto.u16RxReadPos;
     uint16_t len;
@@ -381,7 +381,6 @@ static bool UartProto_PopFrame(uint16_t *pBuf, uint16_t *pLen)
         pBuf[i] = g_UartProto.rxFrameQueue[rp][i];
     }
     g_UartProto.u16RxReadPos = (uint16_t)((rp + 1U) & UART_PROTO_RX_SLOT_MASK);
-    *pLen = len;
     return true;
 }
 
@@ -512,28 +511,18 @@ static void UartProto_PackData(const uint16_t *src, uint16_t *dst, uint16_t byte
     }
 }
 
-/* 5ms：取帧 → 校验地址/CRC → 执行命令；并轮发遥测 */
+/* 5ms：取帧 → 执行命令；并轮发遥测。
+ * 地址/CRC 已在收帧入口（UartProto_RxByte eUartRxBody）过滤后才入队，
+ * 队列为协作上下文单生产者单消费者，出队侧无需复检。 */
 void UartProto_Task_5ms(void)
 {
     uint16_t buf[PROTOCOL_FRAME_SIZE];
     uint16_t data[(PROTOCOL_BMS_PAYLOAD_LEN + 1U) / 2U];
-    uint16_t len = 0U;
     uint16_t cmd;
-    uint16_t calc_crc;
-    uint16_t recv_crc;
     bool runCmdReceived = false;
 
-    while (UartProto_PopFrame(buf, &len) == true)
+    while (UartProto_PopFrame(buf) == true)
     {
-        /* CRC 覆盖除末尾 2 字节外的整帧；帧内为小端 */
-        calc_crc = Fast_CRC16(buf, (uint16_t)(len - 2U));
-        recv_crc = (uint16_t)(buf[len - 2U] & 0xFFU) |
-                   (uint16_t)((buf[len - 1U] & 0xFFU) << 8);
-        if (calc_crc != recv_crc)
-        {
-            continue;
-        }
-
         cmd = buf[3] & 0xFFU;
         UartProto_PackData(&buf[5], data, PROTOCOL_BMS_PAYLOAD_LEN);
         UartProto_HandleCmd(cmd, data);
