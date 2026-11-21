@@ -76,7 +76,7 @@ void main(void)
 
 	CustomUart_Init();			/* SCIB 115200 底层字节通道 */
 	UartProto_Init();			/* 自定义串口协议状态机 */
-	BootProto_Init();			/* ARM 升级协议解析（挂接 CustomUart RX 镜像环，与 UartProto 共存） */
+	BootProto_Init();			/* ARM 升级协议解析（字节由 UartProto_RxTask 直递，与 UartProto 共存） */
 	AdcCtrlInit();				/* 采样池清零 */
 	Notch2f_Init();				/* 100Hz 陷波系数 */
 

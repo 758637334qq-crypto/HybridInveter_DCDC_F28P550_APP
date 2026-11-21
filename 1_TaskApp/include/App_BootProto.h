@@ -50,8 +50,9 @@ typedef struct
 
 extern BootProtoCtrl_t g_BootProto;
 
-void BootProto_Init(void);          /* 清状态并挂接 CustomUart RX 镜像环（main 调一次） */
-void BootProto_Task_Rx(void);       /* 镜像环 → ARM 帧状态机（帧头对齐+定长收集+断帧），1ms 任务 */
+void BootProto_Init(void);          /* 清状态机/标志（main 调一次） */
+void BootProto_Task_Rx(void);       /* 静默断帧检查（1ms；必须排在 UartProto_RxTask 喂字节之前） */
+void BootProto_RxByte(uint16_t byte);   /* 升级协议字节入口：0xD2 → 0x01 → 定长 96 收集 → 解析帧[9] */
 void BootProto_Task_1ms(void);      /* 升级态边沿封波 + FlashReady 2s 确认 → 跳 Boot */
 
 #endif /* APP_BOOTPROTO_H_ */

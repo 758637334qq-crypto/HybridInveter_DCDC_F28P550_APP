@@ -1,13 +1,41 @@
 /* App_UartProto.c — P550 串口协议 V1.3
  * 帧：AA 55 | ADDR | CMD | LEN | DATA[N] | CRC_L CRC_H（小端 CRC16）
- * 1ms 拼帧 → 5ms 执行（地址/CRC 在收帧入口过滤）→ 每 20ms 轮发一帧遥测。
+ * 1ms 驱动 FIFO 直递拼帧 + 校验 + 当拍执行（字节同步喂 Boot）→ 5ms 只做遥测轮发。
  * 升级链路统一由 App_BootProto（ARM 0xD2 帧）处理，原 0x2F 握手已移除 */
 
 #include "Includes.h"
 
-UartProtoCtrl_t g_UartProto;
+/* 半帧超时：3ms 无新字节作废残帧 */
+#define UART_PROTO_FRAME_GAP_MS      (3U)
 
-/* BMS 下发数据的暂存 */
+/* 协议总状态块（模块私有）：外部只读查询走 UartProto_CmdIdleMs() */
+typedef struct
+{
+    uint16_t          rxFrameBuf[PROTOCOL_RX_FRAME_SIZE];   /* 一字节一格，只存低 8 位（恒 16 字） */
+    uint16_t          u16RxFramePos;   /* 收帧位置：0=等 0xAA，1=等 0x55，2~4=头，5~15=数据+CRC */
+    volatile uint32_t u32LastRxByteTick;               /* 最后字节时刻：3ms 断帧判据 */
+    volatile uint32_t u32LastCmdTick;                  /* 最后有效 0x00 时刻：SCI 掉线判据 */
+
+    uint16_t          u16TelemetryTick;
+    uint16_t          u16TxCmdIdx;
+    volatile uint16_t u16TxDropCnt;
+} UartProtoCtrl_t;
+
+/* BMS 侧暂存：仅保留有使用方的字段 */
+typedef struct
+{
+    uint16_t hotCmd;      /* 0x00 Byte7 bit1：加热控制，0=关 1=开 */
+    uint16_t PackSum;     /* 0x05：电池包总数 */
+} UartBmsSide_t;
+
+/* 遥测映射行：命令码 + 4 个变量地址，NULL 填 0 */
+typedef struct
+{
+    uint16_t cmd;
+    const uint16_t *w[4];
+} UartTxMap_t;
+
+static UartProtoCtrl_t g_UartProto;
 static UartBmsSide_t s_bms;
 
 /* Modbus CRC16 查表，多项式 0xA001，初值 0xFFFF */
@@ -118,13 +146,13 @@ bool UartProto_SendPacket(uint16_t addr, uint16_t cmd,
     return CustomUart_Write(pack, (uint16_t)(7U + len));   /* 整帧 7 + N 字节 */
 }
 
-/* 上电清零，状态机回到等 0xAA */
+/* 上电清零，收帧位置回到等 0xAA；两个时间戳取当前时刻，给满额启动宽限 */
 void UartProto_Init(void)
 {
     memset(&g_UartProto, 0, sizeof(g_UartProto));
     memset(&s_bms, 0, sizeof(s_bms));
-    g_UartProto.eRxState = eUartRxWaitSof1;
     g_UartProto.u32LastRxByteTick = Sys_GetTick1ms();
+    g_UartProto.u32LastCmdTick = Sys_GetTick1ms();
 }
 
 /* 遥测映射：命令码 + 4 个变量地址；g_CanMon 有空洞，不能整段 memcpy */
@@ -245,18 +273,19 @@ static void Cmd00_Run(const uint16_t *d)
     UnionSysCmd cmd;
     uint16_t ctrl;
     uint16_t mode;
+    uint16_t bmsAddr;
 
     CfgParam.BatChgCurSet = d[1];
     CfgParam.BatDischgCurSet = d[2];
-    s_bms.bmsAddr = d[3] & 0xFFU;          /* Byte6：BMS 地址 */
+    bmsAddr = d[3] & 0xFFU;                /* Byte6：BMS 地址（仅本函数使用） */
 
     /* ★ 首次有效分址也接受地址 0；变更地址时先撤掉未发出的旧 0x41，
      *   再换 uIndex / 清对端票，避免 CMD 缓冲里带着旧 LogADDR 发出去。 */
-    if ((uMdlAddMes.uIndex != s_bms.bmsAddr) ||
+    if ((uMdlAddMes.uIndex != bmsAddr) ||
         (uMdlAddMes.uCanState.bits.bCalIDCmd != ADDRcmd_end))
     {
         DabCan_CancelTx(CAN_TX_BUF_CMD);
-        uMdlAddMes.uIndex = s_bms.bmsAddr;
+        uMdlAddMes.uIndex = bmsAddr;
         uMdlAddMes.uCanState.bits.bCalIDCmd = ADDRcmd_end;
         CurShare_ResetPeers();
     }
@@ -289,15 +318,13 @@ static void Cmd00_Run(const uint16_t *d)
     SM_SyncSysCmd();
 }
 
-/* 0x05 并联/母线设定，LEN=9 */
+/* 0x05 并联/母线设定，LEN=9：packSum | busVolSet_dV | busDischgCurSet_dA | openLoopDuty | 保留 */
 static void Cmd05_PackBus(const uint16_t *d)
 {
-    const UartBmsBusFrame_t *p = (const UartBmsBusFrame_t *)d;
-
-    s_bms.PackSum            = p->packSum;
-    CfgParam.BusVolSet       = p->busVolSet_dV;
-    CfgParam.BusDischgCurSet = p->busDischgCurSet_dA;
-    CfgParam.OpenLoopDuty    = p->openLoopDuty;
+    s_bms.PackSum            = d[0];
+    CfgParam.BusVolSet       = d[1];
+    CfgParam.BusDischgCurSet = d[2];
+    CfgParam.OpenLoopDuty    = d[3];
 }
 
 uint16_t UartProto_GetPackSum(void)
@@ -321,138 +348,80 @@ static void UartProto_HandleCmd(uint16_t cmd, const uint16_t *data)
     }
 }
 
-/* 1ms 写帧队列；满则丢最旧帧保最新命令 */
-static void UartProto_PushFrame(const uint16_t *pFrame)
-{
-    uint16_t wp = g_UartProto.u16RxWritePos;
-    uint16_t np = (uint16_t)((wp + 1U) & UART_PROTO_RX_SLOT_MASK);
-    uint16_t i;
-
-    if (np == g_UartProto.u16RxReadPos)
-    {
-        /* 队列满：消费端（5ms）停滞说明旧命令已积压过期，
-         * 丢最旧、保最新设定值，防止"执行旧命令、丢弃新命令"；
-         * 与 PopFrame 同处主循环协作上下文，无并发 */
-        g_UartProto.u16RxReadPos =
-            (uint16_t)((g_UartProto.u16RxReadPos + 1U) & UART_PROTO_RX_SLOT_MASK);
-        if (g_UartProto.u16RxFrameDropCnt < 60000U)
-        {
-            g_UartProto.u16RxFrameDropCnt++;
-        }
-    }
-
-    for (i = 0U; i < PROTOCOL_RX_FRAME_SIZE; i++)
-    {
-        g_UartProto.rxFrameQueue[wp][i] = pFrame[i];
-    }
-    g_UartProto.u16RxWritePos  = np;
-}
-
-/* 5ms 读帧队列；空返回 false */
-static bool UartProto_PopFrame(uint16_t *pBuf)
-{
-    uint16_t rp = g_UartProto.u16RxReadPos;
-    uint16_t i;
-
-    if (rp == g_UartProto.u16RxWritePos) { return false; }
-
-    for (i = 0U; i < PROTOCOL_RX_FRAME_SIZE; i++)
-    {
-        pBuf[i] = g_UartProto.rxFrameQueue[rp][i];
-    }
-    g_UartProto.u16RxReadPos = (uint16_t)((rp + 1U) & UART_PROTO_RX_SLOT_MASK);
-    return true;
-}
-
-/* 收帧状态机：等 AA → 等 55 → 收 3 字节头 → 收数据+CRC */
+/* 收帧：单位置索引替代四态枚举——0=等 AA，1=等 55，2~4=头，5~15=数据+CRC；
+ * 收齐 16 字后地址+CRC 过滤，通过则当拍执行（无队列、无溢出丢帧） */
 static void UartProto_RxByte(uint16_t byte)
 {
     uint16_t b = byte & 0xFFU;
+    uint16_t pos = g_UartProto.u16RxFramePos;
     uint16_t addr;
     uint16_t cmd;
     uint16_t calc_crc;
     uint16_t recv_crc;
+    uint16_t data[(PROTOCOL_BMS_PAYLOAD_LEN + 1U) / 2U];
+    uint16_t i;
 
-    switch (g_UartProto.eRxState)
+    g_UartProto.rxFrameBuf[pos] = b;
+    pos++;
+
+    if (pos == 2U)   /* 第二字节：必须 0x55；连续 AA 重新对齐不丢第二个 AA；其余作废 */
     {
-    case eUartRxWaitSof1:
         if (b == PROTOCOL_SOF1)
         {
             g_UartProto.rxFrameBuf[0] = b;
-            g_UartProto.u16RxFramePos = 1U;
-            g_UartProto.eRxState = eUartRxWaitSof2;
+            pos = 1U;
         }
-        break;
-
-    case eUartRxWaitSof2:
-        if (b == PROTOCOL_SOF2)
+        else if (b != PROTOCOL_SOF2)
         {
-            g_UartProto.rxFrameBuf[1] = b;
-            g_UartProto.u16RxFramePos = 2U;
-            g_UartProto.eRxState = eUartRxHead;
+            pos = 0U;
         }
-        /* 连续 AA 时重新对齐，不丢第二个 AA */
-        else if (b == PROTOCOL_SOF1)
-        {
-            g_UartProto.rxFrameBuf[0] = b;
-            g_UartProto.u16RxFramePos = 1U;
-        }
-        else
-        {
-            g_UartProto.eRxState = eUartRxWaitSof1;
-            g_UartProto.u16RxFramePos = 0U;
-        }
-        break;
-
-    case eUartRxHead:
-        g_UartProto.rxFrameBuf[g_UartProto.u16RxFramePos++] = b;
-        /* LEN 只在收帧入口校验一次，命令统一按 9 字节解析。 */
-        if (g_UartProto.u16RxFramePos >= 5U)
-        {
-            if (b != PROTOCOL_BMS_PAYLOAD_LEN)
-            {
-                g_UartProto.eRxState = eUartRxWaitSof1;
-                g_UartProto.u16RxFramePos = 0U;
-            }
-            else
-            {
-                g_UartProto.eRxState = eUartRxBody;
-            }
-        }
-        break;
-
-    case eUartRxBody:
-        g_UartProto.rxFrameBuf[g_UartProto.u16RxFramePos++] = b;
-        /* 收齐 16 字入队，状态机复位 */
-        if (g_UartProto.u16RxFramePos >= PROTOCOL_RX_FRAME_SIZE)
-        {
-            /* 本机/广播、CRC 正确且有处理动作（0x00 运行 / 0x05 并联设定）才占槽；
-             * 其余命令无处理动作，入队只会挤掉有效命令，直接跳过不计数。 */
-            calc_crc = Fast_CRC16(g_UartProto.rxFrameBuf, (uint16_t)(PROTOCOL_RX_FRAME_SIZE - 2U));
-            recv_crc = (uint16_t)(g_UartProto.rxFrameBuf[PROTOCOL_RX_FRAME_SIZE - 2U] & 0xFFU) |
-                       (uint16_t)((g_UartProto.rxFrameBuf[PROTOCOL_RX_FRAME_SIZE - 1U] & 0xFFU) << 8);
-            addr = g_UartProto.rxFrameBuf[2] & 0xFFU;
-            cmd  = g_UartProto.rxFrameBuf[3] & 0xFFU;
-            if (((addr == PROTOCOL_MY_ADDR) || (addr == PROTOCOL_BROADCAST)) &&
-                (calc_crc == recv_crc) &&
-                ((cmd == PROTOCOL_CMD_RUN_0) || (cmd == PROTOCOL_CMD_SET_PACK_BUS_5)))
-            {
-                UartProto_PushFrame(g_UartProto.rxFrameBuf);
-            }
-
-            g_UartProto.eRxState = eUartRxWaitSof1;
-            g_UartProto.u16RxFramePos = 0U;
-        }
-        break;
-
-    default:
-        g_UartProto.eRxState = eUartRxWaitSof1;
-        g_UartProto.u16RxFramePos = 0U;
-        break;
     }
+    else if (pos == 5U)   /* 头收齐：LEN 只在入口校验一次，命令统一按 9 字节解析 */
+    {
+        if (b != PROTOCOL_BMS_PAYLOAD_LEN)
+        {
+            pos = 0U;
+        }
+    }
+    else if (pos >= PROTOCOL_RX_FRAME_SIZE)   /* 16 字收齐：校验 + 当拍执行 */
+    {
+        calc_crc = Fast_CRC16(g_UartProto.rxFrameBuf, (uint16_t)(PROTOCOL_RX_FRAME_SIZE - 2U));
+        recv_crc = (uint16_t)(g_UartProto.rxFrameBuf[PROTOCOL_RX_FRAME_SIZE - 2U] & 0xFFU) |
+                   (uint16_t)((g_UartProto.rxFrameBuf[PROTOCOL_RX_FRAME_SIZE - 1U] & 0xFFU) << 8);
+        addr = g_UartProto.rxFrameBuf[2] & 0xFFU;
+        cmd  = g_UartProto.rxFrameBuf[3] & 0xFFU;
+        if (((addr == PROTOCOL_MY_ADDR) || (addr == PROTOCOL_BROADCAST)) &&
+            (calc_crc == recv_crc) &&
+            ((cmd == PROTOCOL_CMD_RUN_0) || (cmd == PROTOCOL_CMD_SET_PACK_BUS_5)))
+        {
+            /* 数据区 9 字节（一字节一格）→ 小端拼 5 个 16 位字，奇数尾字高字节补 0 */
+            for (i = 0U; i < (uint16_t)((PROTOCOL_BMS_PAYLOAD_LEN - 1U) / 2U); i++)
+            {
+                data[i] = (uint16_t)((g_UartProto.rxFrameBuf[5U + (i * 2U)] & 0xFFU) |
+                                     ((g_UartProto.rxFrameBuf[6U + (i * 2U)] & 0xFFU) << 8));
+            }
+            data[(PROTOCOL_BMS_PAYLOAD_LEN - 1U) / 2U] = g_UartProto.rxFrameBuf[13] & 0xFFU;
+
+            UartProto_HandleCmd(cmd, data);
+            if (cmd == PROTOCOL_CMD_RUN_0)
+            {
+                g_UartProto.u32LastCmdTick = Sys_GetTick1ms();   /* SCI 掉线判据在此刷新 */
+            }
+        }
+        pos = 0U;
+    }
+
+    g_UartProto.u16RxFramePos = pos;
 }
 
-/* 1ms：rxRing → 逐字节拼帧；须排在 CustomUart_Task_Rx 之后 */
+/* 最近有效 0x00 距今毫秒数：App_Fault 以 FAULT_SCI_TIMEOUT_N×5ms 判 SCI 掉线 */
+uint32_t UartProto_CmdIdleMs(void)
+{
+    return (uint32_t)(Sys_GetTick1ms() - g_UartProto.u32LastCmdTick);
+}
+
+/* 1ms：驱动 FIFO 直递拼帧；同一字节流同步喂 Boot 升级协议。
+ * Task_1ms 中 BootProto_Task_Rx（静默断帧检查）必须排在本函数之前。 */
 void UartProto_RxTask(void)
 {
     uint16_t byte;
@@ -460,79 +429,31 @@ void UartProto_RxTask(void)
     /* 半帧超时 3ms：丢弃残帧，重新等 0xAA。
      * 必须在消费新字节之前判断：若新帧首字节先刷新 u32LastRxByteTick，
      * 残帧状态未复位就继续拼帧，会把新帧拼进旧帧（对齐 BootProto 的静默前置检查）。 */
-    if (g_UartProto.eRxState != eUartRxWaitSof1)
+    if (g_UartProto.u16RxFramePos != 0U)
     {
         if ((Sys_GetTick1ms() - g_UartProto.u32LastRxByteTick) >= UART_PROTO_FRAME_GAP_MS)
         {
-            g_UartProto.eRxState = eUartRxWaitSof1;
             g_UartProto.u16RxFramePos = 0U;
         }
     }
 
-    while (g_CustomUart.rxTail != g_CustomUart.rxHead)
+    /* 驱动错误检查/恢复：出错本拍丢弃整段 FIFO（含错误字节前已收到的字节），交由上位机重发 */
+    CustomUart_RxService();
+
+    /* 硬件 FIFO 逐字节直递：16 字节约 1.39ms 填满，1ms 轮询余量 0.39ms（Task1ms 最坏抖动需实测） */
+    while (CustomUart_PopRxByte(&byte))
     {
-        byte = g_CustomUart.rxRing[g_CustomUart.rxTail] & 0xFFU;
-        g_CustomUart.rxTail = (uint16_t)((g_CustomUart.rxTail + 1U) & CUSTOM_UART_RX_RING_MASK);
         g_UartProto.u32LastRxByteTick = Sys_GetTick1ms();
-        g_UartProto.u16RxIdleCnt = 0U;
+        BootProto_RxByte(byte);
         UartProto_RxByte(byte);
     }
 }
 
-/* 一字节一格的帧数据 → 小端拼成 16 位字，供结构体指针访问 */
-static void UartProto_PackData(const uint16_t *src, uint16_t *dst, uint16_t byteLen)
-{
-    uint16_t num = (uint16_t)((byteLen + 1U) / 2U);
-    uint16_t i;
-    uint16_t lo;
-    uint16_t hi;
-
-    for (i = 0U; i < num; i++)
-    {
-        lo = src[i * 2U] & 0xFFU;
-        hi = ((uint16_t)(i * 2U + 1U) < byteLen) ? (src[i * 2U + 1U] & 0xFFU) : 0U;   /* 奇数长度时高字节补 0 */
-        dst[i] = (uint16_t)(lo | (hi << 8));
-    }
-}
-
-/* 5ms：取帧 → 执行命令；并轮发遥测。
- * 地址/CRC 已在收帧入口（UartProto_RxByte eUartRxBody）过滤后才入队，
- * 队列为协作上下文单生产者单消费者，出队侧无需复检。 */
+/* 5ms：4×5ms 轮发一帧遥测；拼帧/校验/命令执行已全部移到 1ms 直递链 */
 void UartProto_Task_5ms(void)
 {
-    uint16_t buf[PROTOCOL_RX_FRAME_SIZE];
-    uint16_t data[(PROTOCOL_BMS_PAYLOAD_LEN + 1U) / 2U];
-    uint16_t cmd;
-    bool runCmdReceived = false;
-
-    while (UartProto_PopFrame(buf) == true)
-    {
-        cmd = buf[3] & 0xFFU;
-        UartProto_PackData(&buf[5], data, PROTOCOL_BMS_PAYLOAD_LEN);
-        UartProto_HandleCmd(cmd, data);
-        if (cmd == PROTOCOL_CMD_RUN_0)
-        {
-            runCmdReceived = true;
-        }
-    }
-
-    /* 接收和运行控制超时分别计数。 */
-    if (g_UartProto.u16RxIdleCnt < 60000U)
-    {
-        g_UartProto.u16RxIdleCnt++;
-    }
-    if (runCmdReceived)
-    {
-        g_UartProto.u16RunCmdIdleCnt = 0U;
-    }
-    else if (g_UartProto.u16RunCmdIdleCnt < 60000U)
-    {
-        g_UartProto.u16RunCmdIdleCnt++;
-    }
-
-    /* 4×5ms 轮发一帧遥测 */
     g_UartProto.u16TelemetryTick++;
-    if (g_UartProto.u16TelemetryTick >= UART_PROTO_TELEMETRY_TICKS)
+    if (g_UartProto.u16TelemetryTick >= PROTOCOL_TELEMETRY_DIV)
     {
         g_UartProto.u16TelemetryTick = 0U;
         UartProto_SendReport();

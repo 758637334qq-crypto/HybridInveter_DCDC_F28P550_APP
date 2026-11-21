@@ -558,15 +558,16 @@ static void Fault_SlowProtect5ms(const FaultSnap_t *p)
         Fault_SetBit16(&stFault.alm, ALM_MASK_OFF_CURR);
     }
 
-    /* ---- ⑦ SCI：开路测试不判（空闲会虚高；门控每拍清位兜底）---- */
+    /* ---- ⑦ SCI：开路测试不判（空闲会虚高；门控每拍清位兜底）----
+     * 掉线判据：最近一次有效 0x00 运行命令距今超过 FAULT_SCI_TIMEOUT_N×5ms。
+     * 等价性：旧实现 (RxIdle>=N)||(RunCmdIdle>=N)，而有效 0x00 同时复位两计数，
+     * 故存活 ⇔ 有效 0x00 在时限内，单时间戳即可表达（UartProto_CmdIdleMs）。 */
     {
         Uint16 u16SciHit = (Uint16)((p->u16OpenTest == 0U) &&
-                                    ((g_UartProto.u16RxIdleCnt >= FAULT_SCI_TIMEOUT_N) ||
-                                     (g_UartProto.u16RunCmdIdleCnt >= FAULT_SCI_TIMEOUT_N)));
+                                    (UartProto_CmdIdleMs() >= (FAULT_SCI_TIMEOUT_N * 5U)));
         Fault_Level(&stFault.slow, &stFaultCnt.run.sci, FAULT_BIT_SCI,
                     u16SciHit, FAULT_N_SCI,
-                    (Uint16)((g_UartProto.u16RxIdleCnt < FAULT_SCI_TIMEOUT_N) &&
-                             (g_UartProto.u16RunCmdIdleCnt < FAULT_SCI_TIMEOUT_N)),
+                    (Uint16)(UartProto_CmdIdleMs() < (FAULT_SCI_TIMEOUT_N * 5U)),
                     FAULT_N_SCI_REC);
     }
 }

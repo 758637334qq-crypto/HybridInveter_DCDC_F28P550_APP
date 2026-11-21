@@ -3,8 +3,8 @@
 * Description: ARM 升级协议解析（原始工程 SCIB 内部通讯协议的 boot 部分）
 *
 * 与 p550 UartProto（AA55 协议）共存，两套协议并行解析同一个 SCIB 字节流：
-*   - 字节源：CustomUart RX 镜像环（CustomUart_AttachRxMirror 挂接，字节复制一份），
-*     不影响主 rxRing 与 UartProto —— UartProto 及其 0x55AA 应用层升级路径零改动；
+*   - 字节源：任务层直递——UartProto_RxTask 从驱动 FIFO 逐字节取出后同步调
+*     BootProto_RxByte（原镜像环方案已删，字节序/时机与镜像方案等价）；
 *   - 帧格式（原始工程 Task_InterComm）：
 *       [0]=0xD2 从机地址 / [1]=0x01 功能码 / 定长 96 字节 / 无 CRC；
 *       字节间隔 >3.5ms 判为断帧（原 u16InterComRXIntervalCnt>INTER_COM_TIME_3MS）；
@@ -24,50 +24,29 @@
 /* FromAppRequestFlag 由 cmd 定址在 0x128（28p55x_cla_flash_lnk.cmd），Boot 阶段读取 */
 extern uint16_t FromAppRequestFlag;
 
-/*------------------------------------------------------------------------------
-* 私有定义
-*------------------------------------------------------------------------------*/
-#define BOOT_PROTO_RX_RING_SIZE     (256U)                      /* 镜像环容量（2 的幂） */
-#define BOOT_PROTO_RX_RING_MASK     (BOOT_PROTO_RX_RING_SIZE - 1U)
-
 #define BOOT_ST_WAIT_ADDR           (0U)                        /* 等帧头地址 */
 #define BOOT_ST_WAIT_FUNC           (1U)                        /* 等功能码 */
 #define BOOT_ST_BODY                (2U)                        /* 收帧体（定长） */
-
-static volatile uint16_t sg_BootRxRing[BOOT_PROTO_RX_RING_SIZE];   /* 镜像环（CustomUart 写 head，本模块读 tail） */
-static volatile uint16_t sg_u16BootRxHead;
-static volatile uint16_t sg_u16BootRxTail;
 
 BootProtoCtrl_t g_BootProto;
 
 /*------------------------------------------------------------------------------
 * FUNCION :  BootProto_Init()
-* PURPOSE :  清状态机/标志，并把本模块镜像环挂接到 CustomUart RX 通道
+* PURPOSE :  清状态机/标志（字节由 UartProto_RxTask 直递，无需挂接）
 *------------------------------------------------------------------------------*/
 void BootProto_Init(void)
 {
     memset(&g_BootProto, 0, sizeof(g_BootProto));
-
-    sg_u16BootRxHead = 0U;
-    sg_u16BootRxTail = 0U;
-
-    /* SCIB 字节流镜像挂接：CustomUart_Task_Rx 每收 1 字节同步复制一份到这里 */
-    CustomUart_AttachRxMirror(sg_BootRxRing, BOOT_PROTO_RX_RING_MASK,
-                              &sg_u16BootRxHead, &sg_u16BootRxTail);
 }
 
 /*------------------------------------------------------------------------------
 * FUNCION :  BootProto_Task_Rx()
-* PURPOSE :  镜像环 → ARM 帧状态机：0xD2 → 0x01 → 定长 96 字节收集 → 解析帧[9]
-*            字节间隔 >4ms 断帧复位（原始 ISR 轮询逻辑等价移植；1ms 任务轮询）
+* PURPOSE :  字节间隔计时（1ms 拍）：>4ms 无新字节 → 半帧作废，回到等帧头。
+*            必须在 UartProto_RxTask 喂字节之前调用（Task_1ms 顺序保证），
+*            否则新帧首字节先刷新静默计数会把新帧拼进旧半帧。
 *------------------------------------------------------------------------------*/
 void BootProto_Task_Rx(void)
 {
-    uint16_t byte;
-    uint16_t next;
-    uint16_t cmd;
-
-    /* 字节间隔计时（1ms 拍）：>4ms 无新字节 → 半帧作废，回到等帧头 */
     g_BootProto.u16SilenceCnt++;
     if (g_BootProto.u16SilenceCnt > BOOT_PROTO_SILENCE_TICKS)
     {
@@ -77,15 +56,22 @@ void BootProto_Task_Rx(void)
             g_BootProto.u16ByteIdx = 0U;
         }
     }
+}
 
-    while (sg_u16BootRxTail != sg_u16BootRxHead)
+/*------------------------------------------------------------------------------
+* FUNCION :  BootProto_RxByte()
+* PURPOSE :  ARM 帧状态机：0xD2 → 0x01 → 定长 96 字节收集 → 解析帧[9]
+*            由 UartProto_RxTask 从驱动 FIFO 直递调用（同一字节流），
+*            每字节刷新静默计时；断帧检查见 BootProto_Task_Rx
+*------------------------------------------------------------------------------*/
+void BootProto_RxByte(uint16_t byte)
+{
+    uint16_t cmd;
+
+    g_BootProto.u16SilenceCnt = 0U;   /* 有新字节：刷新静默计时 */
+
+    switch (g_BootProto.u16State)
     {
-        byte = sg_BootRxRing[sg_u16BootRxTail];
-        sg_u16BootRxTail = (uint16_t)((sg_u16BootRxTail + 1U) & BOOT_PROTO_RX_RING_MASK);
-        g_BootProto.u16SilenceCnt = 0U;   /* 有新字节：刷新静默计时 */
-
-        switch (g_BootProto.u16State)
-        {
             case BOOT_ST_WAIT_ADDR:                     /* 等从机地址 0xD2 */
                 if (byte == BOOT_PROTO_SLAVE_ADDR)
                 {
@@ -168,7 +154,6 @@ void BootProto_Task_Rx(void)
                     g_BootProto.u16ByteIdx = 0U;
                 }
                 break;
-        }
     }
 }
 

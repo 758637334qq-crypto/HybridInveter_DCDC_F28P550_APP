@@ -1,6 +1,7 @@
 /* ConfigChip_CustomUart.c — SCIB 115200-8-N-1 字节通道（轮询，不用中断）
  * 资源表：GPIO14=SCIB_TX / GPIO15=SCIB_RX（ARM 通讯）
- * Write() → TX 环 → 1ms 搬进 TX FIFO；100us 把 RX FIFO 搬进 RX 环 */
+ * TX：Write() → TX 环 → 1ms 搬进 TX FIFO；
+ * RX：无软件环，任务层经 RxService/PopRxByte 从硬件 FIFO 直递 */
 
 #include "Includes.h"
 
@@ -53,16 +54,6 @@ void CustomUart_Init(void)
     ScibRegs.SCICTL1.bit.SWRESET = 1;   /* 退出复位，SCI 开始工作 */
 }
 
-/* 挂接 RX 镜像环：ring/mask/head/tail 由调用方（App_BootProto）提供 */
-void CustomUart_AttachRxMirror(volatile uint16_t *ring, uint16_t mask,
-                               volatile uint16_t *head, volatile uint16_t *tail)
-{
-    g_CustomUart.pRxMirrorRing = ring;
-    g_CustomUart.u16RxMirrorMask = mask;
-    g_CustomUart.pRxMirrorHead = head;
-    g_CustomUart.pRxMirrorTail = tail;
-}
-
 /* 整包写入 TX 环；空间不足则一个字节都不写（原子性） */
 bool CustomUart_Write(const uint16_t *data, uint16_t len)
 {
@@ -97,12 +88,12 @@ bool CustomUart_Write(const uint16_t *data, uint16_t len)
     return ok;
 }
 
-/* 1ms 轮询：RX FIFO → RX 环；出错先复位 SCI 再收（CAN/SCI 接收统一放 1ms 任务） */
-void CustomUart_Task_Rx(void)
+/* 1ms 拍首调（UartProto_RxTask 内）：RX 硬件溢出/错误标志检查与恢复。
+ * 出错按设计丢弃整段 FIFO（含错误字节前已收到的字节），交由上位机超时重发。
+ * 注意：SWRESET 会同时复位 SCI 发送状态机，正在移位输出的字节可能被中止
+ * （对端看到被撕坏的帧，靠 CRC 兜底重发） */
+void CustomUart_RxService(void)
 {
-    uint16_t rx_char;
-    uint16_t next;
-    uint16_t mNext;
     uint16_t rxStatus;
     bool needRecover;
 
@@ -121,10 +112,6 @@ void CustomUart_Task_Rx(void)
     }
     if (needRecover != false)
     {
-        /* 注意：SWRESET 会同时复位 SCI 发送状态机，正在移位输出的字节
-         * 可能被中止（对端看到被撕坏的帧，靠 CRC 兜底重发）；
-         * RX 侧按设计丢弃整段 FIFO（含错误字节前已收到的字节），
-         * 交由上位机超时重发 */
         while (SCI_getRxFIFOStatus(UART_HW_BASE) != SCI_FIFO_RX0)
         {
             (void)SCI_readCharNonBlocking(UART_HW_BASE);
@@ -132,42 +119,20 @@ void CustomUart_Task_Rx(void)
         SCI_clearOverflowStatus(UART_HW_BASE);
         SCI_performSoftwareReset(UART_HW_BASE);
         SCI_resetRxFIFO(UART_HW_BASE);
-        return;   /* 本拍丢弃污染数据 */
     }
+}
 
-    /* 115200bps 下 16 级 FIFO 约 1.39ms 填满，1ms 轮询含调度抖动余量约 0.4ms 内不会溢出；
-     * 万一溢出由 u16RxHwOvfCnt / u16RxDropCnt 计数暴露 */
-    while (SCI_getRxFIFOStatus(UART_HW_BASE) != SCI_FIFO_RX0)
+/* 从硬件 RX FIFO 取一个字节；false = FIFO 空（调用方 1ms 拍内循环直至空）。
+ * 115200bps 下 16 级 FIFO 约 1.39ms 填满，1ms 轮询含调度抖动余量约 0.4ms 内不会溢出；
+ * 万一溢出由 u16RxHwOvfCnt 计数暴露（RX 无软件环，FIFO 直递任务层） */
+bool CustomUart_PopRxByte(uint16_t *b)
+{
+    if (SCI_getRxFIFOStatus(UART_HW_BASE) == SCI_FIFO_RX0)
     {
-        rx_char = (uint16_t)(SCI_readCharNonBlocking(UART_HW_BASE) & 0xFFU);
-        next = (uint16_t)((g_CustomUart.rxHead + 1U) & CUSTOM_UART_RX_RING_MASK);
-
-        if (next != g_CustomUart.rxTail)   /* 软件环留一格区分满/空 */
-        {
-            g_CustomUart.rxRing[g_CustomUart.rxHead] = rx_char;
-            g_CustomUart.rxHead = next;
-        }
-        else
-        {
-            g_CustomUart.u16RxDropCnt++;   /* 环满仍读走硬件字节，避免 FIFO 再溢 */
-        }
-
-        /* 镜像环（可选）：同一字节流复制给 boot 协议（App_BootProto），不影响主环 */
-        if (g_CustomUart.pRxMirrorRing != 0)
-        {
-            mNext = (uint16_t)((*g_CustomUart.pRxMirrorHead + 1U) & g_CustomUart.u16RxMirrorMask);
-
-            if (mNext != *g_CustomUart.pRxMirrorTail)
-            {
-                g_CustomUart.pRxMirrorRing[*g_CustomUart.pRxMirrorHead] = rx_char;
-                *g_CustomUart.pRxMirrorHead = mNext;
-            }
-            else
-            {
-                g_CustomUart.u16RxMirrorDropCnt++;   /* 镜像环满丢弃，由协议侧断帧恢复 */
-            }
-        }
+        return false;
     }
+    *b = (uint16_t)(SCI_readCharNonBlocking(UART_HW_BASE) & 0xFFU);
+    return true;
 }
 
 /* 1ms：TX 环 → TX FIFO → 串口线 */

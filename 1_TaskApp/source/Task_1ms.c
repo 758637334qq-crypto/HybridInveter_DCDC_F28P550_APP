@@ -10,8 +10,8 @@
 /**
  * @brief  1ms 任务体
  * @note   执行顺序：滤波 → 1/Vbat → 斜坡 → CAN/SCIB 接收 → CAN 发送 → SCI TX。
- *         CAN 接收 / SCI RX 搬运拼帧有硬件 FIFO 缓冲，1ms 轮询足够（原在 Task100us）；
- *         SCI 协议校验/命令/遥测在 Task_5ms。
+ *         CAN 接收 / SCI RX 有硬件 FIFO 缓冲，1ms 轮询足够（原在 Task100us）；
+ *         SCIB 拼帧/校验/命令在 Task_1ms（FIFO 直递当拍执行），遥测在 Task_5ms。
  */
 void Task1ms(void)
 {
@@ -29,11 +29,10 @@ void Task1ms(void)
     Ctrl_RampCfg();
 
     /* ---- 接收链路：CAN/SCIB 均有硬件 FIFO 缓冲，1ms 轮询足够（原在 Task100us）----
-     * 顺序不能反：先搬字节，后拼帧 */
+     * SCIB 顺序不能反：先做 Boot 静默断帧检查，后经 UartProto_RxTask 喂字节 */
     CanComm_Task_Rx();       /* CAN 取帧 + 0x20/均流转发 + 地址握手 */
-    CustomUart_Task_Rx();    /* SCIB 硬件 RX FIFO → 软件 rxRing（同时镜像给 boot 协议环） */
-    BootProto_Task_Rx();     /* ARM 升级协议：镜像环 → 帧状态机 → 帧[9] 置升级标志（独立于 UartProto） */
-    UartProto_RxTask();      /* rxRing → 拼帧状态机 → 完整帧队列 */
+    BootProto_Task_Rx();     /* ARM 升级协议：静默断帧检查（字节由 UartProto_RxTask 直递） */
+    UartProto_RxTask();      /* SCIB FIFO 直递：3ms 断帧 → 校验 → 当拍执行；字节同步喂 Boot */
 
     CanComm_Task_Tx_1ms();   /* ★ 与接收统一使用应用层（含示波器存满后 3ms/帧上传） */
     CustomUart_Task_1ms();   /* TX 环 → TX FIFO → 串口线 */
