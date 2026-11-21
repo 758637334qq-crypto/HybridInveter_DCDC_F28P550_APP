@@ -90,9 +90,10 @@ bool CustomUart_Write(const uint16_t *data, uint16_t len)
 
 /* 1ms 拍首调（UartProto_RxTask 内）：RX 硬件溢出/错误标志检查与恢复。
  * 出错按设计丢弃整段 FIFO（含错误字节前已收到的字节），交由上位机超时重发。
+ * 返回 true = 本拍发生过错误恢复，调用方应立即作废正在接收中的半帧。
  * 注意：SWRESET 会同时复位 SCI 发送状态机，正在移位输出的字节可能被中止
  * （对端看到被撕坏的帧，靠 CRC 兜底重发） */
-void CustomUart_RxService(void)
+bool CustomUart_RxService(void)
 {
     uint16_t rxStatus;
     bool needRecover;
@@ -120,6 +121,8 @@ void CustomUart_RxService(void)
         SCI_performSoftwareReset(UART_HW_BASE);
         SCI_resetRxFIFO(UART_HW_BASE);
     }
+
+    return needRecover;
 }
 
 /* 从硬件 RX FIFO 取一个字节；false = FIFO 空（调用方 1ms 拍内循环直至空）。

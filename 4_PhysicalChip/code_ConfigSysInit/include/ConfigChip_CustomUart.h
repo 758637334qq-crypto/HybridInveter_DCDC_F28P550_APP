@@ -29,7 +29,7 @@ extern CustomUartCtrl_t g_CustomUart;
 
 void CustomUart_Init(void);   /* 上电调一次 */
 
-void CustomUart_RxService(void);   /* RX 溢出/错误检查与恢复（1ms 拍首调，出错丢弃整段 FIFO） */
+bool CustomUart_RxService(void);   /* RX 溢出/错误检查与恢复（1ms 拍首调，出错丢弃整段 FIFO）；返回 true=本拍已恢复，调用方须作废在收半帧 */
 
 bool CustomUart_PopRxByte(uint16_t *b);   /* 从硬件 RX FIFO 取一个字节；false = 空（拍内循环） */
 

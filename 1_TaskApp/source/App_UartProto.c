@@ -434,8 +434,13 @@ void UartProto_RxTask(void)
         }
     }
 
-    /* 驱动错误检查/恢复：出错本拍丢弃整段 FIFO（含错误字节前已收到的字节），交由上位机重发 */
-    CustomUart_RxService();
+    /* 驱动错误检查/恢复：出错本拍丢弃整段 FIFO（含错误字节前已收到的字节），交由上位机重发；
+     * 返回 true 时立即作废在收半帧——残帧由已被丢弃的字节拼成，若保留，
+     * 紧随重发的首字节会拼进旧残帧造成错位（重发紧随时无 3ms 静默间隔可依赖） */
+    if (CustomUart_RxService())
+    {
+        g_UartProto.u16RxFramePos = 0U;
+    }
 
     /* 硬件 FIFO 逐字节直递：16 字节约 1.39ms 填满，1ms 轮询余量 0.39ms（Task1ms 最坏抖动需实测） */
     while (CustomUart_PopRxByte(&byte))
