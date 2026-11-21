@@ -475,16 +475,9 @@ void UartProto_RxTask(void)
 {
     uint16_t byte;
 
-    while (g_CustomUart.rxTail != g_CustomUart.rxHead)
-    {
-        byte = g_CustomUart.rxRing[g_CustomUart.rxTail] & 0xFFU;
-        g_CustomUart.rxTail = (uint16_t)((g_CustomUart.rxTail + 1U) & CUSTOM_UART_RX_RING_MASK);
-        g_UartProto.u32LastRxByteTick = Sys_GetTick1ms();
-        g_UartProto.u16RxIdleCnt = 0U;
-        UartProto_RxByte(byte);
-    }
-
-    /* 半帧超时 3ms：丢弃残帧，重新等 0xAA */
+    /* 半帧超时 3ms：丢弃残帧，重新等 0xAA。
+     * 必须在消费新字节之前判断：若新帧首字节先刷新 u32LastRxByteTick，
+     * 残帧状态未复位就继续拼帧，会把新帧拼进旧帧（对齐 BootProto 的静默前置检查）。 */
     if (g_UartProto.eRxState != eUartRxWaitSof1)
     {
         if ((Sys_GetTick1ms() - g_UartProto.u32LastRxByteTick) >= UART_PROTO_FRAME_GAP_MS)
@@ -492,6 +485,15 @@ void UartProto_RxTask(void)
             g_UartProto.eRxState = eUartRxWaitSof1;
             g_UartProto.u16RxFramePos = 0U;
         }
+    }
+
+    while (g_CustomUart.rxTail != g_CustomUart.rxHead)
+    {
+        byte = g_CustomUart.rxRing[g_CustomUart.rxTail] & 0xFFU;
+        g_CustomUart.rxTail = (uint16_t)((g_CustomUart.rxTail + 1U) & CUSTOM_UART_RX_RING_MASK);
+        g_UartProto.u32LastRxByteTick = Sys_GetTick1ms();
+        g_UartProto.u16RxIdleCnt = 0U;
+        UartProto_RxByte(byte);
     }
 }
 
