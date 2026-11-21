@@ -5,61 +5,9 @@
 
 #include "Includes.h"
 
-/* 半帧超时：3ms 无新字节作废残帧 */
-#define UART_PROTO_FRAME_GAP_MS      (3U)
+UartProtoCtrl_t g_UartProto;   /* 类型与 extern 声明见 App_UartProto.h（分区：常量/类型/变量/API） */
 
-/* 协议总状态块（模块私有）：外部只读查询走 UartProto_CmdIdleMs() */
-typedef struct
-{
-    uint16_t          rxFrameBuf[PROTOCOL_RX_FRAME_SIZE];   /* 一字节一格，只存低 8 位（恒 16 字） */
-    uint16_t          u16RxFramePos;   /* 收帧位置：0=等 0xAA，1=等 0x55，2~4=头，5~15=数据+CRC */
-    volatile uint32_t u32LastRxByteTick;               /* 最后字节时刻：3ms 断帧判据 */
-    volatile uint32_t u32LastCmdTick;                  /* 最后有效 0x00 时刻：SCI 掉线判据 */
-
-    uint16_t          u16TelemetryTick;
-    uint16_t          u16TxCmdIdx;
-    volatile uint16_t u16TxDropCnt;
-} UartProtoCtrl_t;
-
-/* 0x01~0x04 校准帧，LEN=9：前 8 字节 k/b，最后 1 字节保留 */
-typedef struct
-{
-    uint16_t k1;
-    int16_t  b1;
-    uint16_t k2;
-    int16_t  b2;
-    uint16_t rsvd;
-} UartBmsCalFrame_t;
-
-/* 四组校准数据 */
-typedef struct
-{
-    UartBmsCalFrame_t bus12;
-    UartBmsCalFrame_t busPcsI1;
-    UartBmsCalFrame_t i2Itot;
-    UartBmsCalFrame_t vbatIbat;
-} UartBmsCal_t;
-
-/* BMS 侧暂存：协议有、固件暂无独立变量的量 */
-typedef struct
-{
-    uint16_t soc_dPct;    /* 0x00 Byte0~1：SOC 0.1% */
-    uint16_t hotCmd;      /* 0x00 Byte7 bit1：加热控制，0=关 1=开 */
-    uint16_t phase;       /* 0x00 Byte7 bit5：相数选择，0=单相 1=三相（预留） */
-    uint16_t bmsMode;     /* 0x00 mode bit1：BMS 模式，0=正常 1=BMS 模式 */
-    uint16_t adiMode;     /* 0x00 mode bit3：校准模式，1=进入校准 */
-    uint16_t PackSum;     /* 0x05：电池包总数 */
-    UartBmsCal_t cal;
-} UartBmsSide_t;
-
-/* 遥测映射行：命令码 + 4 个变量地址，NULL 填 0 */
-typedef struct
-{
-    uint16_t cmd;
-    const uint16_t *w[4];
-} UartTxMap_t;
-
-static UartProtoCtrl_t g_UartProto;
+/* BMS 侧暂存（类型见 .h） */
 static UartBmsSide_t s_bms;
 
 /* Modbus CRC16 查表，多项式 0xA001，初值 0xFFFF */
@@ -402,6 +350,11 @@ static void UartProto_RxByte(uint16_t byte)
     uint16_t recv_crc;
     uint16_t data[(PROTOCOL_BMS_PAYLOAD_LEN + 1U) / 2U];
     uint16_t i;
+
+    if ((pos == 0U) && (b != PROTOCOL_SOF1))
+    {
+        return;
+    }
 
     g_UartProto.rxFrameBuf[pos] = b;
     pos++;
