@@ -434,6 +434,15 @@ void UartProto_RxTask(void)
         }
     }
 
+    /* SCI 空闲钳位：空闲超过 60s 后把 u32LastCmdTick 钉在 now-60s，
+     * 使 CmdIdleMs 恒为有界值、不跨 32 位回卷点（回卷周期 49.7 天，
+     * 连续断联满一个周期会使差值回卷到 0，10s 内误判 SCI 恢复）。
+     * 正常运行 0x00 间隔远小于 60s，本分支不触发，10s 掉线判据行为不变。 */
+    if ((Sys_GetTick1ms() - stUartProto.u32LastCmdTick) > UART_PROTO_IDLE_CAP_MS)
+    {
+        stUartProto.u32LastCmdTick = Sys_GetTick1ms() - UART_PROTO_IDLE_CAP_MS;
+    }
+
     /* 驱动错误检查/恢复：出错本拍丢弃整段 FIFO（含错误字节前已收到的字节），交由上位机重发；
      * 返回 true 时立即作废在收半帧——残帧由已被丢弃的字节拼成，若保留，
      * 紧随重发的首字节会拼进旧残帧造成错位（重发紧随时无 3ms 静默间隔可依赖） */
