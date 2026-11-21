@@ -87,7 +87,8 @@ static uint16_t F32ToU16(float v)
     return (uint16_t)t;
 }
 
-/* 组帧并整包写入 TX 环；长度超限或空指针直接返回 false */
+/* 组帧并整包写入 TX 环；载荷上限 24 由 TX 环容量决定（可用 31 字节 - 帧开销 7），
+ * 超限或空指针直接返回 false */
 bool UartProto_SendPacket(uint16_t addr, uint16_t cmd,
                           const uint16_t *pData, uint16_t len)
 {
@@ -368,6 +369,7 @@ static void UartProto_RxByte(uint16_t byte)
 {
     uint16_t b = byte & 0xFFU;
     uint16_t addr;
+    uint16_t cmd;
     uint16_t calc_crc;
     uint16_t recv_crc;
 
@@ -424,13 +426,16 @@ static void UartProto_RxByte(uint16_t byte)
         /* 收齐 16 字入队，状态机复位 */
         if (g_UartProto.u16RxFramePos >= PROTOCOL_RX_FRAME_SIZE)
         {
-            /* 本机/广播且 CRC 正确的帧才占用队列槽位。 */
+            /* 本机/广播、CRC 正确且有处理动作（0x00 运行 / 0x05 并联设定）才占槽；
+             * 其余命令无处理动作，入队只会挤掉有效命令，直接跳过不计数。 */
             calc_crc = Fast_CRC16(g_UartProto.rxFrameBuf, (uint16_t)(PROTOCOL_RX_FRAME_SIZE - 2U));
             recv_crc = (uint16_t)(g_UartProto.rxFrameBuf[PROTOCOL_RX_FRAME_SIZE - 2U] & 0xFFU) |
                        (uint16_t)((g_UartProto.rxFrameBuf[PROTOCOL_RX_FRAME_SIZE - 1U] & 0xFFU) << 8);
             addr = g_UartProto.rxFrameBuf[2] & 0xFFU;
+            cmd  = g_UartProto.rxFrameBuf[3] & 0xFFU;
             if (((addr == PROTOCOL_MY_ADDR) || (addr == PROTOCOL_BROADCAST)) &&
-                (calc_crc == recv_crc))
+                (calc_crc == recv_crc) &&
+                ((cmd == PROTOCOL_CMD_RUN_0) || (cmd == PROTOCOL_CMD_SET_PACK_BUS_5)))
             {
                 UartProto_PushFrame(g_UartProto.rxFrameBuf);
             }

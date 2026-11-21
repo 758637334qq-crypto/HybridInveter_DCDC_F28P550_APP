@@ -12,8 +12,8 @@
 #define PROTOCOL_SOF2              (0x55U)
 #define PROTOCOL_MY_ADDR           (0x01U)
 #define PROTOCOL_BROADCAST         (0xFFU)
-/* 数据区最多 32 字节，整帧 = 7 + N */
-#define PROTOCOL_MAX_PAYLOAD       (32U)
+/* 数据区最多 24 字节：TX 环 32 格可用 31（留一格区分满/空），整帧 7+N ≤ 31 → N ≤ 24 */
+#define PROTOCOL_MAX_PAYLOAD       (24U)
 #define PROTOCOL_FRAME_SIZE        (PROTOCOL_MAX_PAYLOAD + 7U)
 
 /* BMS 下发 0x00~0x05，数据区均为 9 字节 */
