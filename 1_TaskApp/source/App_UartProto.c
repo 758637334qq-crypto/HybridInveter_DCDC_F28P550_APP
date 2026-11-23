@@ -67,13 +67,6 @@ static void sPutU16(uint16_t *p, uint16_t v)
     p[1] = (uint16_t)((v >> 8) & 0xFFU);
 }
 
-/* C2000 上 uint32 = 两个字，hi=0/1 取低/高字 */
-static uint16_t sU32Word(const uint32_t *p, uint16_t hi)
-{
-    const uint16_t *w = (const uint16_t *)p;
-    return w[hi];
-}
-
 /* float 四舍五入并限幅 0~65535，供 0x51/0x52 上报 */
 static uint16_t sF32ToU16(float v)
 {
@@ -198,15 +191,17 @@ static void sSendReport(void)
     }
     else if (cmd == 0x4AU)   /* 32 位实时告警拆成 4 个字 */
     {
-        sPutU16(&tx[0], sU32Word(&g_CanMon.RealAlarm.slowfault1, 0U));
-        sPutU16(&tx[2], sU32Word(&g_CanMon.RealAlarm.slowfault1, 1U));
+        const uint32_t slowFault = g_CanMon.RealAlarm.slowfault1;
+        sPutU16(&tx[0], (uint16_t)slowFault);
+        sPutU16(&tx[2], (uint16_t)(slowFault >> 16U));
         sPutU16(&tx[4], g_CanMon.RealAlarm.alarm); /* 原 slowfault2 低字：alm */
         sPutU16(&tx[6], 0U);                       /* 原 slowfault2 高字恒 0 */
     }
     else if (cmd == 0x4CU)   /* 锁存告警同理 */
     {
-        sPutU16(&tx[0], sU32Word(&g_CanMon.SaveAlarm.saveslowfault1, 0U));
-        sPutU16(&tx[2], sU32Word(&g_CanMon.SaveAlarm.saveslowfault1, 1U));
+        const uint32_t slowFault = g_CanMon.SaveAlarm.saveslowfault1;
+        sPutU16(&tx[0], (uint16_t)slowFault);
+        sPutU16(&tx[2], (uint16_t)(slowFault >> 16U));
         sPutU16(&tx[4], g_CanMon.SaveAlarm.savealarm);
         sPutU16(&tx[6], 0U);
     }
@@ -340,10 +335,10 @@ static void sHandleCmd(uint16_t cmd, const uint16_t *data)
 
 /* 收帧位置：0=等 AA，1=等 55，2~4=头，5~15=数据和 CRC。
  * 收齐 16 字节并校验通过后，当拍执行有效命令。
- * 长度或 CRC 错误时丢弃当前帧，从下一个字节重新寻找帧头。 */
+ * 长度或 CRC 错误时丢弃当前帧，从下一个字节重新寻找帧头。
+ * 入口统一规范化低 8 位；缓冲只存规范化字节，解包不再重复 &0xFF。 */
 static void sRxByte(uint16_t byte)
 {
-    uint16_t b = byte & 0xFFU;
     uint16_t pos = stUartProto.u16RxFramePos;
     uint16_t addr;
     uint16_t cmd;
@@ -352,30 +347,32 @@ static void sRxByte(uint16_t byte)
     uint16_t data[(PROTOCOL_BMS_PAYLOAD_LEN + 1U) / 2U];
     uint16_t i;
 
-    if ((pos == 0U) && (b != PROTOCOL_SOF1))
+    byte &= 0xFFU;
+
+    if ((pos == 0U) && (byte != PROTOCOL_SOF1))
     {
         return;
     }
 
-    stUartProto.u16RxFrameBuf[pos] = b;
+    stUartProto.u16RxFrameBuf[pos] = byte;
     pos++;
 
     if (pos == 2U)   /* 第二字节：必须 0x55；连续 AA 重新对齐不丢第二个 AA；其余作废 */
     {
-        if (b == PROTOCOL_SOF1)
+        if (byte == PROTOCOL_SOF1)
         {
             pos = 1U;
         }
-        else if (b != PROTOCOL_SOF2)
+        else if (byte != PROTOCOL_SOF2)
         {
             pos = 0U;
         }
     }
     else if (pos == 5U)   /* 头收齐：LEN 只在入口校验一次，命令统一按 9 字节解析 */
     {
-        if (b != PROTOCOL_BMS_PAYLOAD_LEN)
+        if (byte != PROTOCOL_BMS_PAYLOAD_LEN)
         {
-            if (b == PROTOCOL_SOF1)
+            if (byte == PROTOCOL_SOF1)
             {
                 stUartProto.u16RxFrameBuf[0] = PROTOCOL_SOF1;
                 pos = 1U;
@@ -389,10 +386,10 @@ static void sRxByte(uint16_t byte)
     else if (pos >= PROTOCOL_RX_FRAME_SIZE)   /* 16 字收齐：校验 + 当拍执行 */
     {
         calc_crc = sFastCrc16(stUartProto.u16RxFrameBuf, (uint16_t)(PROTOCOL_RX_FRAME_SIZE - 2U));
-        recv_crc = (uint16_t)(stUartProto.u16RxFrameBuf[PROTOCOL_RX_FRAME_SIZE - 2U] & 0xFFU) |
-                   (uint16_t)((stUartProto.u16RxFrameBuf[PROTOCOL_RX_FRAME_SIZE - 1U] & 0xFFU) << 8);
-        addr = stUartProto.u16RxFrameBuf[2] & 0xFFU;
-        cmd  = stUartProto.u16RxFrameBuf[3] & 0xFFU;
+        recv_crc = (uint16_t)(stUartProto.u16RxFrameBuf[PROTOCOL_RX_FRAME_SIZE - 2U] |
+                              (stUartProto.u16RxFrameBuf[PROTOCOL_RX_FRAME_SIZE - 1U] << 8));
+        addr = stUartProto.u16RxFrameBuf[2];
+        cmd  = stUartProto.u16RxFrameBuf[3];
         /* 本机/广播、CRC 正确且命令有处理动作（0x00~0x05 均有对应分支）才执行；
          * 其余命令静默丢弃，不占任何资源 */
         if (((addr == PROTOCOL_MY_ADDR) || (addr == PROTOCOL_BROADCAST)) &&
@@ -402,10 +399,10 @@ static void sRxByte(uint16_t byte)
             /* 数据区 9 字节（一字节一格）→ 小端拼 5 个 16 位字，奇数尾字高字节补 0 */
             for (i = 0U; i < (uint16_t)((PROTOCOL_BMS_PAYLOAD_LEN - 1U) / 2U); i++)
             {
-                data[i] = (uint16_t)((stUartProto.u16RxFrameBuf[5U + (i * 2U)] & 0xFFU) |
-                                     ((stUartProto.u16RxFrameBuf[6U + (i * 2U)] & 0xFFU) << 8));
+                data[i] = (uint16_t)(stUartProto.u16RxFrameBuf[5U + (i * 2U)] |
+                                     (stUartProto.u16RxFrameBuf[6U + (i * 2U)] << 8));
             }
-            data[(PROTOCOL_BMS_PAYLOAD_LEN - 1U) / 2U] = stUartProto.u16RxFrameBuf[13] & 0xFFU;
+            data[(PROTOCOL_BMS_PAYLOAD_LEN - 1U) / 2U] = stUartProto.u16RxFrameBuf[13];
 
             sHandleCmd(cmd, data);
             if (cmd == PROTOCOL_CMD_RUN_0)

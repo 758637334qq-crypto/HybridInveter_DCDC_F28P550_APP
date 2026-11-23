@@ -62,31 +62,31 @@ bool CustomUart_Write(const uint16_t *data, uint16_t len)
     uint16_t head;
     uint16_t tail;
     uint16_t i;
-    bool ok = false;
 
-    if ((len > 0U) && (data != 0))
+    if ((len == 0U) || (data == 0))
     {
-        head = stCustomUart.u16TxHead;
-        tail = stCustomUart.u16TxTail;
-
-        /* 剩余空间 = (tail − head − 1) & MASK；留一格区分满/空 */
-        free_space = (uint16_t)((tail - head - 1U) & CUSTOM_UART_TX_RING_MASK);
-
-        if (free_space >= len)
-        {
-            for (i = 0U; i < len; i++)
-            {
-                stCustomUart.u16TxRing[head] = data[i] & 0xFFU;   /* UART 只发低 8 位 */
-
-                head = (uint16_t)((head + 1U) & CUSTOM_UART_TX_RING_MASK);   /* & MASK 走到末尾绕回 */
-            }
-
-            /* 全部写完才更新 head，1ms 任务此时才看得见 */
-            stCustomUart.u16TxHead = head;
-            ok = true;
-        }
+        return false;
     }
-    return ok;
+
+    head = stCustomUart.u16TxHead;
+    tail = stCustomUart.u16TxTail;
+
+    /* 剩余空间 = (tail − head − 1) & MASK；留一格区分满/空 */
+    free_space = (uint16_t)((tail - head - 1U) & CUSTOM_UART_TX_RING_MASK);
+    if (free_space < len)
+    {
+        return false;
+    }
+
+    for (i = 0U; i < len; i++)
+    {
+        stCustomUart.u16TxRing[head] = data[i] & 0xFFU;   /* UART 只发低 8 位 */
+        head = (uint16_t)((head + 1U) & CUSTOM_UART_TX_RING_MASK);
+    }
+
+    /* 全部写完才更新 head，1ms 任务此时才看得见 */
+    stCustomUart.u16TxHead = head;
+    return true;
 }
 
 /* 1ms 拍首调（UartProto_RxTask 内）：RX 硬件溢出/错误标志检查与恢复。
