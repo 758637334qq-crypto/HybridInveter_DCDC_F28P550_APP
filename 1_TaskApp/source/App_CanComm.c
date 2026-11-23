@@ -141,13 +141,6 @@ static void CanComm_SendScope(void)
         }
     }
 
-    if ((DataScope.uTran_CMD == 0U) ||
-        (DataScope.uCurrent_Save_subscript < (Uint16)SCOPENUM) ||
-        (DabCan_TxReady(CAN_TX_BUF_SCOPE) == 0U))
-    {
-        return;
-    }
-
     u16Point = DataScope.uCurrent_Tran_subscript;
     u16Slot  = u16Point;
     if (u16Point < (Uint16)PRE_TRIGGER_NUM)

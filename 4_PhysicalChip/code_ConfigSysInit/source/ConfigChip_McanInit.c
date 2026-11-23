@@ -34,6 +34,14 @@
 #define DAB_CAN_PSR_BO_SET() \
     ((HWREG(DAB_CAN_BASE + MCAN_PSR) & MCAN_PSR_BO_MASK) != 0UL)
 
+/* 经典 CAN 元素：4×32bit = 16B（替代 FD 布局的 s_canTxMsg/s_canRxMsg） */
+#define DAB_CAN_ELEM_BYTES          (16U)
+#define DAB_CAN_T0_XTD              (1UL << 30)
+#define DAB_CAN_T0_RTR              (1UL << 29)
+#define DAB_CAN_T1_DLC_SHIFT        (16U)
+#define DAB_CAN_T1_FDF              (1UL << 21)
+#define DAB_CAN_T1_DLC8_MM          ((8UL << DAB_CAN_T1_DLC_SHIFT) | (0xAAUL << 24))
+
 /* ★ 0=正常，1=RAM，2=进入 INIT，3=配置，4=进入 Normal，
  *   5=运行中异常 INIT，6=受限模式 ASM。 */
 Uint16 g_u16DabCanInitError = 1U;
@@ -41,10 +49,55 @@ volatile uint32_t g_u32DabCanUnexpectedInitCount;
 volatile uint32_t g_u32DabCanRestrictedAsmCount;
 volatile uint32_t g_au32DabCanRxLostEvents[2];
 
-/* 收发元素含 data[64]（CAN-FD 布局），放文件静态区，避免 1ms 任务栈峰值；
- * 任务串行调用且 ISR 不进 Send/Recv，无重入。 */
-static MCAN_TxBufElement s_canTxMsg;
-static MCAN_RxBufElement s_canRxMsg;
+/* ★ 仅收发载荷走 Message RAM 直读写；Init/就绪/FIFO 状态仍用 DriverLib。 */
+static void DabCan_MsgRamWriteTx(Uint16 u16BufIdx, uint32_t u32Id, const Uint16 *pu16Data)
+{
+    uint32_t addr = DAB_CAN_BASE + DAB_CAN_TX_BUF_START +
+                    ((uint32_t)u16BufIdx * DAB_CAN_ELEM_BYTES);
+
+    HWREG(addr) = (u32Id & 0x1FFFFFFFUL) | DAB_CAN_T0_XTD;
+    HWREG(addr + 4U) = DAB_CAN_T1_DLC8_MM;
+    HWREG(addr + 8U) =
+        ((uint32_t)(pu16Data[0] & 0xFFU)) |
+        ((uint32_t)(pu16Data[1] & 0xFFU) << 8) |
+        ((uint32_t)(pu16Data[2] & 0xFFU) << 16) |
+        ((uint32_t)(pu16Data[3] & 0xFFU) << 24);
+    HWREG(addr + 12U) =
+        ((uint32_t)(pu16Data[4] & 0xFFU)) |
+        ((uint32_t)(pu16Data[5] & 0xFFU) << 8) |
+        ((uint32_t)(pu16Data[6] & 0xFFU) << 16) |
+        ((uint32_t)(pu16Data[7] & 0xFFU) << 24);
+}
+
+static DAB_CAN_RX_RESULT DabCan_MsgRamReadRx(uint32_t u32FifoStart,
+                                             uint32_t u32GetIdx,
+                                             DATACanType *pMsg)
+{
+    uint32_t addr = DAB_CAN_BASE + u32FifoStart + (u32GetIdx * DAB_CAN_ELEM_BYTES);
+    uint32_t w0 = HWREG(addr);
+    uint32_t w1 = HWREG(addr + 4U);
+    uint32_t d0 = HWREG(addr + 8U);
+    uint32_t d1 = HWREG(addr + 12U);
+
+    if (((w0 & DAB_CAN_T0_XTD) == 0UL) ||
+        ((w0 & DAB_CAN_T0_RTR) != 0UL) ||
+        ((w1 & DAB_CAN_T1_FDF) != 0UL) ||
+        (((w1 >> DAB_CAN_T1_DLC_SHIFT) & 0xFUL) != 8UL))
+    {
+        return DAB_CAN_RX_INVALID;
+    }
+
+    pMsg->CanId.all = w0 & 0x1FFFFFFFUL;
+    pMsg->CanData.Dat[0] = (Uint16)(d0 & 0xFFU);
+    pMsg->CanData.Dat[1] = (Uint16)((d0 >> 8) & 0xFFU);
+    pMsg->CanData.Dat[2] = (Uint16)((d0 >> 16) & 0xFFU);
+    pMsg->CanData.Dat[3] = (Uint16)((d0 >> 24) & 0xFFU);
+    pMsg->CanData.Dat[4] = (Uint16)(d1 & 0xFFU);
+    pMsg->CanData.Dat[5] = (Uint16)((d1 >> 8) & 0xFFU);
+    pMsg->CanData.Dat[6] = (Uint16)((d1 >> 16) & 0xFFU);
+    pMsg->CanData.Dat[7] = (Uint16)((d1 >> 24) & 0xFFU);
+    return DAB_CAN_RX_VALID;
+}
 
 /* 发送缓冲编号（对应 eCAN 邮箱 11 / 12 / 13） */
 Uint16 DabCan_TxReady(Uint16 u16BufIdx)
@@ -69,30 +122,12 @@ Uint16 DabCan_TxReady(Uint16 u16BufIdx)
  */
 Uint16 DabCan_Send(Uint16 u16BufIdx, uint32_t u32Id, const Uint16 *pu16Data)
 {
-    Uint16 i;
-
     if ((pu16Data == 0) || (DabCan_TxReady(u16BufIdx) == 0U))
     {
         return 0U;
     }
 
-    memset(&s_canTxMsg, 0, sizeof(s_canTxMsg));
-    s_canTxMsg.id  = u32Id & 0x1FFFFFFFUL;
-    s_canTxMsg.rtr = 0U;
-    s_canTxMsg.xtd = 1U;                 /* 29 位扩展帧 */
-    s_canTxMsg.esi = 0U;
-    s_canTxMsg.dlc = 8U;                 /* 经典 CAN，有效 8 字节 */
-    s_canTxMsg.brs = 0U;                 /* 不切换波特率（经典 CAN） */
-    s_canTxMsg.fdf = 0U;                 /* 经典帧，非 CAN-FD */
-    s_canTxMsg.efc = 0U;
-    s_canTxMsg.mm  = 0xAAU;
-
-    for (i = 0U; i < 8U; i++)
-    {
-        s_canTxMsg.data[i] = (Uint16)(pu16Data[i] & 0xFFU);
-    }
-
-    MCAN_writeMsgRam(DAB_CAN_BASE, MCAN_MEM_TYPE_BUF, (uint32_t)u16BufIdx, &s_canTxMsg);
+    DabCan_MsgRamWriteTx(u16BufIdx, u32Id, pu16Data);
     /* ★ 直写 TXBAR（写 1 置位），避免 DriverLib 读-改-写与多缓冲/ISR 竞态 */
     HWREG(DAB_CAN_BASE + MCAN_TXBAR) = (1UL << u16BufIdx);
     return 1U;
@@ -126,7 +161,8 @@ void DabCan_CancelTx(Uint16 u16BufIdx)
 DAB_CAN_RX_RESULT DabCan_Recv(uint32_t u32FifoNum, DATACanType *pMsg)
 {
     MCAN_RxFIFOStatus st;
-    Uint16 i;
+    uint32_t fifoStart;
+    DAB_CAN_RX_RESULT result;
 
     if ((g_u16DabCanInitError != 0U) || (pMsg == 0) || (u32FifoNum > MCAN_RX_FIFO_NUM_1))
     {
@@ -149,21 +185,11 @@ DAB_CAN_RX_RESULT DabCan_Recv(uint32_t u32FifoNum, DATACanType *pMsg)
         return DAB_CAN_RX_EMPTY;
     }
 
-    MCAN_readMsgRam(DAB_CAN_BASE, MCAN_MEM_TYPE_FIFO, 0U, u32FifoNum, &s_canRxMsg);
+    fifoStart = (u32FifoNum == MCAN_RX_FIFO_NUM_0) ?
+                DAB_CAN_RX_FIFO0_START : DAB_CAN_RX_FIFO1_START;
+    result = DabCan_MsgRamReadRx(fifoStart, st.getIdx, pMsg);
     MCAN_writeRxFIFOAck(DAB_CAN_BASE, u32FifoNum, st.getIdx);
-
-    if ((s_canRxMsg.xtd == 0U) || (s_canRxMsg.rtr != 0U) ||
-        (s_canRxMsg.fdf != 0U) || (s_canRxMsg.dlc != 8U))
-    {
-        return DAB_CAN_RX_INVALID;
-    }
-
-    pMsg->CanId.all = s_canRxMsg.id & 0x1FFFFFFFUL;
-    for (i = 0U; i < 8U; i++)
-    {
-        pMsg->CanData.Dat[i] = (Uint16)(s_canRxMsg.data[i] & 0xFFU);
-    }
-    return DAB_CAN_RX_VALID;
+    return result;
 }
 
 /* ============================================================================
@@ -425,4 +451,3 @@ void DabCan_CheckState(void)
         ++g_u32DabCanUnexpectedInitCount;
     }
 }
-
