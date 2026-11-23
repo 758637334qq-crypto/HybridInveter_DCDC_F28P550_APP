@@ -8,8 +8,7 @@
 
 /**
  * @brief  5ms 任务体
- * @note   顺序：陷波 → 串口协议（先刷新有效帧时间戳）→ 慢保护（含 SCI 故障）
- *         → 遥测汇总 → CAN 内务。
+ * @note   顺序：陷波 → 串口 → 慢保护 → 软起计时(SM) → 遥测 → CAN 内务
  */
 void Task5ms(void)
 {
@@ -20,6 +19,7 @@ void Task5ms(void)
     UartProto_Task_5ms();
 
     Fault_Detect5ms();
+    SM_SoftStartTick5ms(); /* 计时在 SM；满则 Fault_SetSoftTo（须在 Fault 之后） */
     Update_CanMon();
     CanComm_Task_5ms(); /* Bus-Off + 地址计时 */
 }

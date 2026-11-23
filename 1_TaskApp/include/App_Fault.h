@@ -3,7 +3,8 @@
  * 文件名称: App_Fault.h
  * 模块功能: DAB 故障统一（FaultDetect 角色：只置/清故障字）
  *
- *   §1 阈值与拍数  §2 位号与掩码  §3 故障字  §4 计数/快照类型与变量  §5 接口
+ *   §1 阈值与拍数  §2 位号与掩码  §3 故障字  §4 对外接口
+ *   去抖/锁定计数组类型与 stFaultCnt 仅在 App_Fault.c（CCS 观察该 .c 符号）
  * ============================================================================
  */
 #ifndef APP_FAULT_H
@@ -41,7 +42,7 @@
 #define FAULT_N_VBUS_OV            (200U)     /* 过压触发 200 拍 = 1s */
 #define FAULT_N_VBUS_OV_REC        (2000U)    /* 过压恢复 2000 拍 = 10s */
 #define FAULT_N_VBUS_UV            (3000U)    /* 欠压触发 3000 拍 = 15s（须实际发波中） */
-#define FAULT_N_VBUS_UV_REC        (3000U)    /* 欠压恢复 3000 拍 = 15s（仅计时，无电压回差条件） */
+#define FAULT_N_VBUS_UV_REC        (3000U)    /* 欠压恢复 3000 拍 = 15s（无其它故障时无条件计时，无电压回差） */
 #define FAULT_N_IBUS_OV            (10U)      /* 过流触发 10 拍 = 50ms */
 #define FAULT_N_IBUS_REC           (2000U)    /* 过流恢复 2000 拍 = 10s */
 #define FAULT_N_POWER              (20U)      /* 功率过限触发 20 拍 = 100ms */
@@ -59,15 +60,18 @@
  * (FAULT_FAST_REC_N=1000) + 重启时间"，否则同一窗口内凑不满 3 次上升沿，
  * 锁定永不生效；30 秒允许约 3 次"5s 恢复 + 重启"循环后锁定。 */
 #define FAULT_N_SHORT_LOCK_WIN     (6000U)
-#define FAULT_N_CMPSS_LOCK_HIT     (5U)       /* CMPSS 锁定门限：5min 窗口内第 5 次上升沿 → alm.hardalm */
-#define FAULT_N_CMPSS_LOCK_WIN     (60000UL)  /* CMPSS 锁定窗口：60000 拍 × 5ms = 5 分钟 */
+#define FAULT_N_CMPSS_LOCK_HIT     (5U)       /* CMPSS 过流锁定：5min 窗口内第 5 次整组上升沿 */
+#define FAULT_N_CMPSS_LOCK_WIN     (60000U)   /* CMPSS 锁定窗口：60000 拍 × 5ms = 5 分钟 */
+/* 两个锁定窗口须可被 16 位窗口计数容纳（RetryLock_t.win 为 Uint16，见 App_Fault.c） */
+typedef char RetryWinCheck_t[((FAULT_N_SHORT_LOCK_WIN <= 65535U) &&
+                              (FAULT_N_CMPSS_LOCK_WIN <= 65535U)) ? 1 : -1];
 
-/* ---- 软起超时（Fault_Detect5ms 内；计时 RunState.softStartTick）---- */
+/* ---- 软起超时门限（计时在 SM_SoftStartTick5ms；满则 Fault_SetSoftTo）---- */
 #define FAULT_N_SOFT_TO            (10000U)   /* 本态连续 10000×5ms=50s（EnterState 清 tick）；armed 至首次 RUN */
 
 #define FAULT_BAT_UV_V             (35.0f)
 #define FAULT_BAT_UV_REC_V         (40.0f)
-#define FAULT_N_BAT_UV             (4U)       /* 3 拍，约 15ms */
+#define FAULT_N_BAT_UV             (4U)       /* 4 拍 = 20ms */
 #define FAULT_N_BAT_UV_REC         (1000U)    /* 1000 拍，约 5s */
 
 /* ---- 快保护拍数（Fault_FastProtect 在 ISR 中调用，1 拍 = ISR 周期；
@@ -112,7 +116,7 @@ typedef enum
 typedef enum
 {
     ALM_BIT_LOCK = 0,            /* bit0  重复短路锁定：30s 窗口 3 次短路保护（§6 锁定） */
-    ALM_BIT_HARDALM,             /* bit1  CMPSS 重复跳闸锁定：5min 窗口 5 次 */
+    ALM_BIT_HARDALM,             /* bit1  CMPSS 重复过流锁定：5min 窗口 5 次 */
     ALM_BIT_OFF_CURR             /* bit2  关断电流异常：停机请求后仍有电流（不自动恢复） */
 } FaultAlmBit_e;
 
@@ -134,10 +138,8 @@ typedef char FastBitMapCheck_t[((FAST_BIT_VOUT_OV == 0) &&
 #define ALM_MASK_HARDALM           FAULT_MASK16(ALM_BIT_HARDALM)
 #define ALM_MASK_OFF_CURR          FAULT_MASK16(ALM_BIT_OFF_CURR)
 
-#define CMPSS_MASK                 (FAULT_MASK(FAULT_BIT_CMPSS_VBUS_OVP) | \
-                                    FAULT_MASK(FAULT_BIT_CMPSS_IDD1_OCP) | \
+#define CMPSS_OCP_MASK             (FAULT_MASK(FAULT_BIT_CMPSS_IDD1_OCP) | \
                                     FAULT_MASK(FAULT_BIT_CMPSS_IDD2_OCP))
-                                    /* slow 字中 CMPSS 硬件跳闸三位合并掩码（锁定事件源用） */
 
 /* ==========================================================================
  * §3 故障数据（仅整数字）
@@ -157,80 +159,14 @@ extern volatile FaultData_t stFault;
                       /* 任一故障字非零（含 lock / hardalm / offCurr） */
 
 /* ==========================================================================
- * §4 计数 / 快照类型与变量（供 CCS 观察；定义在 App_Fault.c）
- * ========================================================================== */
-
-typedef struct
-{
-    Uint16 trip;   /* 触发方向计数：条件连续成立拍数（断即清零） */
-    Uint16 rec;    /* 恢复方向计数：安全条件连续成立拍数（断即清零） */
-} FaultTick_t;
-
-typedef struct
-{
-    Uint16 hits;   /* 窗口内累计的上升沿次数（达门限即锁定清零） */
-    Uint32 win;    /* 窗口已流逝拍数（自首次上升沿起算，固定窗口） */
-} RetryLock_t;
-
-typedef struct
-{
-    float  f32Vbus;      /* 继电器 VM 母线电压：过压/欠压/短路/CMPSS 恢复统一判据
-                          * （VBUS1/2 只用于功率计算，不参与保护） */
-    float  f32Iabs;      /* |Ibus1 + Ibus2|：母线总电流绝对值 */
-    float  f32Islow;     /* 100ms 滤波总电流绝对值：关断电流异常判据 */
-    float  f32I0;        /* 通道 0 电流：CMPSS 过流恢复判据 */
-    float  f32I1;        /* 通道 1 电流：CMPSS 过流恢复判据 */
-    Uint16 u16PwmOn;     /* 本拍 PWM 是否有效输出（电流类判据门控） */
-    Uint16 u16OpenTest;  /* 本拍是否开路测试模式（欠压/SCI 判据门控） */
-} FaultSnap_t;
-
-typedef struct
-{
-    FaultTick_t batUv;      /* 电池欠压迟滞计数 */
-    FaultTick_t vbusOv;     /* 慢过压迟滞计数 */
-    FaultTick_t ibusOv;     /* 慢过流迟滞计数 */
-    FaultTick_t powerOv;    /* 功率过限迟滞计数 */
-    FaultTick_t vbusUn;     /* 欠压迟滞计数 */
-    FaultTick_t busShort;   /* 短路迟滞计数 */
-    FaultTick_t sci;        /* SCI 超时迟滞计数 */
-    Uint16      offCurrHit; /* 关断电流异常连续命中计数 */
-
-    Uint16      fastOvHit;  /* ISR：快过压连续命中计数 */
-    Uint16      fastI1Hit;  /* ISR：通道 0 过流连续命中计数 */
-    Uint16      fastI2Hit;  /* ISR：通道 1 过流连续命中计数 */
-    Uint16      fastImbHit; /* ISR：不平衡连续命中计数 */
-    Uint16      fastRec[FAST_BIT_COUNT];   /* 5ms：快保护各位恢复计数（5s 延时） */
-
-    Uint16      cmpssVRec;  /* CMPSS 母线过压位恢复计数（连续 10s） */
-    Uint16      cmpssI1Rec; /* CMPSS 通道 0 过流位恢复计数 */
-    Uint16      cmpssI2Rec; /* CMPSS 通道 1 过流位恢复计数 */
-
-    Uint16      u16ShortPrev;   /* 上一拍短路位（§6 上升沿计次用） */
-    Uint32      u32CmpssPrev;   /* 上一拍 CMPSS 事件字（§6 上升沿计次用） */
-} FaultRunCnt_t;
-
-typedef struct
-{
-    RetryLock_t shortLock;      /* 短路重试：30s 窗口 3 次上升沿 → alm.lock */
-    RetryLock_t cmpssLock;      /* CMPSS 重试：5min 窗口 5 次上升沿 → alm.hardalm */
-} FaultRetryCnt_t;
-
-typedef struct
-{
-    FaultRunCnt_t   run;
-    FaultRetryCnt_t retry;
-} FaultCnt_t;
-
-extern FaultCnt_t stFaultCnt;
-
-/* ==========================================================================
- * §5 对外接口
+ * §4 对外接口
  * ========================================================================== */
 
 void Fault_Init(void);
 void Fault_Detect5ms(void);
 void Fault_SetRelay(void);
 void Fault_ClearRelay(void);
+void Fault_SetSoftTo(void);
 void Fault_ClearSoftTo(void);
 Uint16 Fault_PreStartHwOk(void);
 void Fault_FastProtect(float f32BusCurr0, float f32BusCurr1);

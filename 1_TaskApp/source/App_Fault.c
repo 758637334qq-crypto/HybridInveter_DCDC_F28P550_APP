@@ -2,19 +2,11 @@
  * ============================================================================
  * 文件名称: App_Fault.c
  * 模块功能: 只做故障判断与置位（安克 FaultDetect 角色）。
- *   状态机 / ISR 直接读 stFault；软起超时读写 RunState.softStart* 置 softTo。
- *   本模块是检测层，不改状态流转。
+ *   状态机 / ISR 直接读 stFault；软起计时在 SM，满则调 Fault_SetSoftTo。
+ *   本模块是检测层，不改状态流转，不写 RunState。
  * ----------------------------------------------------------------------------
- * 阅读顺序（本文件按此顺序分节）：
- *   §1 变量         stFault / stFaultCnt
- *   §2 RAM 函数     Abs / Confirm / ImbHit / FastProtect —— 带 .TI.ramfunc，
- *                   随 ISR 进 RAM 执行，集中一处便于核对 RAM 运行区占用
- *   §3 状态快照     Fault_PwmOn / Fault_OpenTest / Fault_TakeSnap
- *   §4 通用去抖     Fault_Level / Fault_RetryLockTick / Fault_FastRecTick
- *   §5 专项判据     Fault_Short / SlowProtect5ms（①~⑦）
- *   §6 支撑         CMPSS 采集 / 清故障 / 入口前置处理
- *   §7 快保护恢复   Fault_FastRecover5ms（5ms，5s 安全延时）
- *   §8 对外接口     Fault_Init / Fault_Detect5ms（含软起超时）/ Fault_*Relay
+ * 阅读顺序：§1 类型/变量 → §2 RAM → §3 快照 → §4 去抖 → §5 判据
+ *           → §6 支撑 → §7 快恢复 → §8 对外接口
  * ============================================================================
  */
 #include "Includes.h"          /* 全局头文件：含 stADC、RunState、SysCmd、Bus 等外部声明 */
@@ -22,11 +14,68 @@
 #include "App_DabModel.h"      /* DAB 数学模型头文件：含 uMdlAddMes 等模型输出 */
 
 /* ==========================================================================
- * §1 变量（类型见 App_Fault.h）
+ * §1 本文件类型与变量（不对外；CCS 观察 stFaultCnt）
  * ========================================================================== */
 
-volatile FaultData_t stFault;     /* 三整字故障字：slow / fast / alm（位定义见 App_Fault.h §2） */
-FaultCnt_t           stFaultCnt;  /* 去抖与锁定计数组（字段说明见 App_Fault.h §4） */
+typedef struct
+{
+    Uint16 trip;
+    Uint16 rec;
+} FaultTick_t;
+
+typedef struct
+{
+    Uint16 hits;
+    Uint16 win;
+} RetryLock_t;
+
+typedef struct
+{
+    float  f32Vbus;
+    float  f32Iabs;
+    float  f32Islow;
+    float  f32I0;
+    float  f32I1;
+    Uint16 u16PwmOn;
+    Uint16 u16OpenTest;
+} FaultSnap_t;
+
+typedef struct
+{
+    FaultTick_t batUv;
+    FaultTick_t vbusOv;
+    FaultTick_t ibusOv;
+    FaultTick_t powerOv;
+    FaultTick_t vbusUn;
+    FaultTick_t busShort;
+    FaultTick_t sci;
+    Uint16      offCurrHit;
+    Uint16      fastOvHit;
+    Uint16      fastI1Hit;
+    Uint16      fastI2Hit;
+    Uint16      fastImbHit;
+    Uint16      fastRec[FAST_BIT_COUNT];
+    Uint16      cmpssVRec;
+    Uint16      cmpssI1Rec;
+    Uint16      cmpssI2Rec;
+    Uint16      u16ShortPrev;
+    Uint16      u16CmpssPrev;
+} FaultRunCnt_t;
+
+typedef struct
+{
+    RetryLock_t shortLock;
+    RetryLock_t cmpssLock;
+} FaultRetryCnt_t;
+
+typedef struct
+{
+    FaultRunCnt_t   run;
+    FaultRetryCnt_t retry;
+} FaultCnt_t;
+
+volatile FaultData_t stFault;
+FaultCnt_t           stFaultCnt;
 
 /* ==========================================================================
  * §2 RAM 执行函数（ISR 热路径）
@@ -53,48 +102,28 @@ static inline float Fault_Abs(float x)
     return (x >= 0.0f) ? x : -x;
 }
 
-/**
- * @brief 故障字幂等置位（32 位；slow 在 5ms 上下文写）
- */
+/** @brief 故障字置位（32 位；slow，5ms 上下文） */
 static void Fault_SetBit(volatile Uint32 *pAll, Uint32 u32Mask)
 {
-    if ((*pAll & u32Mask) == 0UL)
-    {
-        *pAll |= u32Mask;
-    }
+    *pAll |= u32Mask;
 }
 
-/**
- * @brief 故障字幂等清除，理由同 Fault_SetBit
- */
+/** @brief 故障字清除（32 位） */
 static void Fault_ClearBit(volatile Uint32 *pAll, Uint32 u32Mask)
 {
-    if ((*pAll & u32Mask) != 0UL)
-    {
-        *pAll &= ~u32Mask;
-    }
+    *pAll &= ~u32Mask;
 }
 
-/**
- * @brief 16 位故障字幂等置位（fast / alm）
- */
+/** @brief 故障字置位（16 位；fast / alm） */
 static void Fault_SetBit16(volatile Uint16 *pAll, Uint16 u16Mask)
 {
-    if ((*pAll & u16Mask) == 0U)
-    {
-        *pAll |= u16Mask;
-    }
+    *pAll |= u16Mask;
 }
 
-/**
- * @brief 16 位故障字幂等清除
- */
+/** @brief 故障字清除（16 位） */
 static void Fault_ClearBit16(volatile Uint16 *pAll, Uint16 u16Mask)
 {
-    if ((*pAll & u16Mask) != 0U)
-    {
-        *pAll &= (Uint16)(~u16Mask);
-    }
+    *pAll &= (Uint16)(~u16Mask);
 }
 
 /**
@@ -145,34 +174,13 @@ static inline Uint16 Fault_ImbHit(float i0, float i1)
 }
 
 /**
- * @brief 快速硬件保护检测（ISR 入口）
- *
- * @param f32BusCurr0    通道 0 电流采样值 (A)
- * @param f32BusCurr1    通道 1 电流采样值 (A)
- *
- * 母线电压在函数内取继电器 VM，与 5ms 恢复/慢保护/电压环同源，
- * 避免触发与恢复使用不同测点导致"仍过压却已清故障"。
- *
- * ── 设计原则 ──────────────────────────────────────────
- *   ① 只置位、不恢复：快保护一旦触发即锁存，
- *      恢复由 5ms 任务 Fault_FastRecover5ms() 负责（lock 置位后不恢复）。
- *   ② 连续 N 拍确认：防止 ADC 单次毛刺误触发。
- *   ③ 开路测试不屏蔽本函数：软件过压/过流/不平衡必须全程有效，
- *      OpenTest 只在 5ms 慢保护里屏蔽欠压等非过类判据。
- *
- * 注：CMPSS 硬件跳闸位（slow.cmpss*）不在本函数处理——CMPSS 触发时
- *     硬件已直接封波（OST/DCAEVT），不依赖固件，固件只需在 5ms 任务里
- *     记录锁存源并置位上报，不占用 ISR 时间。见 §6 Fault_CmpssSrc5ms。
- * ─────────────────────────────────────────────────────
+ * @brief 快保护（ISR）：只置位不恢复；电压取 VM，与 5ms 同源；开路测试不屏蔽。
+ *        CMPSS 硬件跳闸由 5ms Fault_CmpssSrc5ms 登记。
  */
 #pragma CODE_SECTION(Fault_FastProtect, ".TI.ramfunc");
 void Fault_FastProtect(float f32BusCurr0, float f32BusCurr1)
 {
-    float f32Vbus;                      /* 继电器 VM 母线电压 (V) */
-
-    /* ---- ① 母线过压软件快保护（ADC，与 CMPSS 互补）----
-     * 电压源与慢保护/快恢复/电压环同一路（VM）；VBUS1/2 仅供功率计算 */
-    f32Vbus = stADC.VmBusVolt.f32IsrResult;
+    float f32Vbus = stADC.VmBusVolt.f32IsrResult;
 
     if (Fault_Confirm(&stFaultCnt.run.fastOvHit,
                       (Uint16)(f32Vbus > DAB_DISCHARGE_BUS_OVP_VOLT),
@@ -296,39 +304,14 @@ static void Fault_TakeSnap(FaultSnap_t *p)
  * ========================================================================== */
 
 /**
- * @brief 通用故障位 置位/清除 函数（迟滞计数法）
- *
- * @param pWord    指向目标故障字（如 &stFault.slow）
- * @param pTick    指向该故障项的计数器
- * @param u16Bit   故障位在字中的位号 (0~31)
- * @param u16Hit   当前周期触发条件是否成立 (1/0)
- * @param u16TripN 触发所需连续成立周期数
- * @param u16RecHit 当前周期恢复条件是否成立 (1/0)
- * @param u16RecN  恢复所需连续成立周期数（0 = 不自动恢复）
- *
- * ── 原理 ──────────────────────────────────────────────
- *   触发路径：
- *     每个控制周期若 hit=1，trip 计数 +1；
- *     当 trip >= tripN 时，将 word 的第 bit 位置 1（故障置位）。
- *     若 hit=0，trip 立即清零（要求连续成立）。
- *
- *   恢复路径（仅 recN > 0 时有效）：
- *     故障已置位且 recHit=1 时，rec 计数 +1；
- *     当 rec >= recN 时，清除该位并重置 rec；
- *     若 recHit=0 或故障未置位，rec 立即清零。
- *
- *   作用：防止信号毛刺导致误触发/误恢复，提高抗扰性。
- *
- * ── 注意 ──────────────────────────────────────────────
- *   tripN 必须 >= 1。若传 0，则 "trip >= tripN" 恒成立，hit=1 的每一拍
- *   都会置位（等于无确认）；确需"单拍即触发"请传 1。
- * ─────────────────────────────────────────────────────
+ * @brief 迟滞置位/清除：hit 连续 tripN 置位；hit=0 且 recHit 连续 recN 清位（recN=0 不自动恢复）。
+ *        tripN 须 ≥1；hit 成立时不同拍做恢复。细则见故障模块说明 §2.3。
  */
 static void Fault_Level(volatile Uint32 *pAll, FaultTick_t *pTick, Uint16 u16Bit,
                         Uint16 u16Hit, Uint16 u16TripN,
                         Uint16 u16RecHit, Uint16 u16RecN)
 {
-    Uint32 u32Mask = FAULT_MASK(u16Bit);   /* 例：bit=3 → mask=0x08 */
+    Uint32 u32Mask = FAULT_MASK(u16Bit);
 
     /* ---- 触发方向：连续成立才累计 ---- */
     if (u16Hit != 0U)
@@ -371,15 +354,10 @@ static void Fault_Level(volatile Uint32 *pAll, FaultTick_t *pTick, Uint16 u16Bit
 }
 
 /**
- * @brief 固定窗口重复触发锁定推进（短路 / 快保护 / CMPSS 共用）
- *
- * 采用"固定窗口（自首次触发起算）"，不是滑动窗口：
- * 窗口从第一次上升沿开始计时，u32WinMax 拍后若累计次数未达 u16HitMax，
- * 则计数清零并重新等待下一次触发；窗口内上升沿一旦达到 u16HitMax
- * 立即置位 u16AlmMask 对应 alm 位（不等窗口结束）。
+ * @brief 固定窗口重复触发锁定：上升沿计次，达 hitMax 立即置 alm；窗口到期未满则清零重来。
  */
 static void Fault_RetryLockTick(RetryLock_t *pLock, Uint16 u16Rising,
-                                Uint16 u16HitMax, Uint32 u32WinMax,
+                                Uint16 u16HitMax, Uint16 u16WinMax,
                                 Uint16 u16AlmMask)
 {
     if (u16Rising != 0U)
@@ -391,50 +369,46 @@ static void Fault_RetryLockTick(RetryLock_t *pLock, Uint16 u16Rising,
     {
         Fault_SetBit16(&stFault.alm, u16AlmMask);
         pLock->hits = 0U;
-        pLock->win  = 0UL;
+        pLock->win  = 0U;
     }
-    else if ((pLock->hits != 0U) && (++pLock->win >= u32WinMax))
+    else if ((pLock->hits != 0U) && (++pLock->win >= u16WinMax))
     {
         pLock->hits = 0U;                  /* 窗口到期 → 重新计数 */
-        pLock->win  = 0UL;
+        pLock->win  = 0U;
     }
 }
 
 /**
- * @brief 快保护单项恢复判断（直接改故障字，无返回值）
+ * @brief 通用"连续 N 拍满足才恢复"计数（快保护 / CMPSS 恢复共用）
  *
- * @param pWord    快保护故障字指针（stFault.fast）
- * @param u16Mask  本项对应的故障位掩码
- * @param u16Ok    当前周期安全条件是否成立 (1=安全, 0=仍危险)
- * @param pu16Cnt  指向该故障项的恢复计数器
+ * @param pu16Cnt   恢复计数器
+ * @param u16BitSet 是否在恢复太 (1=已置位)
+ * @param u16Ok     恢复条件是否成立 (1=安全, 0=仍危险)
+ * @param u16RecN   恢复时间
+ * @return 1 = 已连续满足 u16RecN 拍，调用方执行清位动作
+ *
+ * 三段式语义：位未置位或条件不满足 → 计数清零、保持锁存；
+ * 连续满足 u16RecN 拍 → 返回 1。清位方式（16/32 位故障字、附加动作）
+ * 由调用方决定，本函数只做计数。
  */
-static void Fault_FastRecTick(volatile Uint16 *pWord, Uint16 u16Mask,
-                              Uint16 u16Ok, Uint16 *pu16Cnt)
+static Uint16 Fault_RecCntTick(Uint16 *pu16Cnt, Uint16 u16BitSet,
+                               Uint16 u16Ok, Uint16 u16RecN)
 {
-    /* ① 故障位 = 0：无需恢复，清计数 */
-    if ((*pWord & u16Mask) == 0U)
+    if ((u16BitSet == 0U) || (u16Ok == 0U))
     {
-        *pu16Cnt = 0U;
-        return;
+        *pu16Cnt = 0U;                     /* 无需恢复或仍危险：重新计时，保持锁存 */
+        return 0U;
     }
-
-    /* ② 故障位 = 1 但条件不满足：重新计时，保持锁存 */
-    if (u16Ok == 0U)
-    {
-        *pu16Cnt = 0U;
-        return;
-    }
-
-    /* ③ 条件连续满足 FAULT_FAST_REC_N 拍：清故障位 */
-    if (*pu16Cnt < FAULT_FAST_REC_N)
+    if (*pu16Cnt < u16RecN)
     {
         (*pu16Cnt)++;
     }
-    if (*pu16Cnt >= FAULT_FAST_REC_N)
+    if (*pu16Cnt >= u16RecN)
     {
         *pu16Cnt = 0U;
-        *pWord &= (Uint16)(~u16Mask);
+        return 1U;
     }
+    return 0U;
 }
 
 /* ==========================================================================
@@ -442,53 +416,27 @@ static void Fault_FastRecTick(volatile Uint16 *pWord, Uint16 u16Mask,
  * ========================================================================== */
 
 /**
- * @brief 母线短路故障检测（含固定窗口锁定）
- *
- * @param f32IAbs   母线总电流绝对值 |Ibus| (A)
- * @param f32Vbus   母线电压 (V)，取继电器 VM 实测值
- *
- * ── 短路判据（只看电量，不绑发波门）────────────────────
- *   同时满足：
- *     ① |Ibus| >= lim          （电流超过动态阈值）
- *     ② Vbus  < FAULT_VBUS_SHORT （母线电压跌落）
- *   不看 Fault_PwmOn：充电压差停波会清 g_stDabIsrState.u16ChgPwmActive，
- *   若再要求 PwmOn，母线跌落+大电流反而不计短路；欠压仍用 PwmOn。
- *
- *   动态阈值 lim = |I_ref| - 2.0，钳位到 [FAULT_I_SHORT_LO, FAULT_I_SHORT_HI]
- *
- * ── 触发/恢复 ────────────────────────────────────────
- *   触发：连续 FAULT_N_SHORT 次命中 → 置位 SHORT
- *   恢复：连续 FAULT_N_SHORT_REC 次未命中 → 清除 SHORT
- * ─────────────────────────────────────────────────────
+ * @brief 母线短路：|I|≥lim 且 V<SHORT；lim=|Iref|-2 钳位 [LO,HI]；不绑 PwmOn。
+ *        重试锁定在 Detect5ms 按上升沿统计。
  */
 static void Fault_Short(float f32IAbs, float f32Vbus)
 {
-    float  f32ISet = Fault_Abs(Bus.f32Ref);      /* |I_ref| */
-    float  f32Lim  = f32ISet - 2.0f;             /* 动态阈值 = |I_ref| - 2 A */
+    float  f32Lim = Fault_Abs(Bus.f32Ref) - 2.0f;
     Uint16 u16Hit;
 
-    /* 上限钳位 */
     if (f32Lim > FAULT_I_SHORT_HI)
     {
         f32Lim = FAULT_I_SHORT_HI;
     }
-    /* 下限钳位：限流值不得低于最灵敏的 LO，保证短路保护始终有效 */
     if (f32Lim < FAULT_I_SHORT_LO)
     {
         f32Lim = FAULT_I_SHORT_LO;
     }
 
-    /* 短路命中：电流超限 && 电压跌落（与是否发波无关） */
     u16Hit = (Uint16)((f32IAbs >= f32Lim) && (f32Vbus < FAULT_VBUS_SHORT));
-
-    /* 置位/恢复沿用通用迟滞计数 */
     Fault_Level(&stFault.slow, &stFaultCnt.run.busShort, FAULT_BIT_SHORT,
                 u16Hit, FAULT_N_SHORT,
                 (Uint16)(u16Hit == 0U), FAULT_N_SHORT_REC);
-
-    /* 短路重试锁定不在本函数计数——统一由 Detect5ms 第 6 步按上升沿
-     * 在 30s 窗口内统计（30s 窗口覆盖本处原 5s 窗口的全部场景），
-     * 避免两处窗口口径不一。 */
 }
 
 /**
@@ -499,13 +447,15 @@ static void Fault_Short(float f32IAbs, float f32Vbus)
  */
 static void Fault_SlowProtect5ms(const FaultSnap_t *p)
 {
-    const float f32Vbat = stADC.BatVolt.f32IsrResult;
     Uint16 u16OtherFault;               /* ④ 判据：除欠压外的其它故障 */
 
-    /* 原始电池电压可直接判断欠压，滤波值有下限。 */
+    /* 电池欠压：开路测试不判（门控每拍清位兜底）；滤波下限不可靠，用原始采样。 */
     Fault_Level(&stFault.slow, &stFaultCnt.run.batUv, FAULT_BIT_BAT_UV,
-                (Uint16)(f32Vbat < FAULT_BAT_UV_V), FAULT_N_BAT_UV,
-                (Uint16)(f32Vbat > FAULT_BAT_UV_REC_V), FAULT_N_BAT_UV_REC);
+                (Uint16)((p->u16OpenTest == 0U) &&
+                         (stADC.BatVolt.f32IsrResult < FAULT_BAT_UV_V)),
+                FAULT_N_BAT_UV,
+                (Uint16)(stADC.BatVolt.f32IsrResult > FAULT_BAT_UV_REC_V),
+                FAULT_N_BAT_UV_REC);
 
     /* ---- ① 母线过压 ---- */
     Fault_Level(&stFault.slow, &stFaultCnt.run.vbusOv, FAULT_BIT_VBUS_OV,
@@ -531,7 +481,8 @@ static void Fault_SlowProtect5ms(const FaultSnap_t *p)
     /* ---- ④ 母线欠压 ---
      * 触发：实际发波中（Fault_PwmOn）+ 非开路测试 + 无其它故障 + Vbus < 350V，连续 15s。
      *   充电压差不足/打嗝停波：PwmOn=0，不累计。
-     * 恢复：Vbus ≥ 360V 连续 15s 主动清位（不再无条件定时清）。*/
+     * 恢复：无其它故障时无条件定时清位（recHit=无其它故障，无电压回差），连续 15s。
+     *   有其它故障在位时不恢复欠压，避免与其它保护抢清位。*/
     u16OtherFault = (Uint16)(((stFault.slow &
                                ~(FAULT_MASK(FAULT_BIT_VBUS_UN))) != 0UL) ||
                              (stFault.fast != 0U) ||
@@ -543,7 +494,7 @@ static void Fault_SlowProtect5ms(const FaultSnap_t *p)
                          (u16OtherFault == 0U) &&
                          (p->f32Vbus < FAULT_VBUS_UV)),
                 FAULT_N_VBUS_UV,
-                1U,                                            /* 恢复无条件，仅由时间决定 */
+                (Uint16)(u16OtherFault == 0U),                 /* 无其它故障 → 无条件计时恢复 */
                 FAULT_N_VBUS_UV_REC);
 
     /* ---- ⑤ 母线短路：仅 I+V；PwmOn 只给欠压用 ---- */
@@ -558,16 +509,14 @@ static void Fault_SlowProtect5ms(const FaultSnap_t *p)
         Fault_SetBit16(&stFault.alm, ALM_MASK_OFF_CURR);
     }
 
-    /* ---- ⑦ SCI：开路测试不判（空闲会虚高；门控每拍清位兜底）----
-     * 掉线判据：最近一次有效 0x00 运行命令距今超过 FAULT_SCI_TIMEOUT_N×5ms。
-     * 等价性：旧实现 (RxIdle>=N)||(RunCmdIdle>=N)，而有效 0x00 同时复位两计数，
-     * 故存活 ⇔ 有效 0x00 在时限内，单时间戳即可表达（UartProto_CmdIdleMs）。 */
+    /* ---- ⑦ SCI：开路测试不判；空闲 ≥ FAULT_SCI_TIMEOUT_N×5ms 判掉线 ---- */
     {
+        Uint16 u16IdleMs = UartProto_CmdIdleMs();
         Uint16 u16SciHit = (Uint16)((p->u16OpenTest == 0U) &&
-                                    (UartProto_CmdIdleMs() >= (FAULT_SCI_TIMEOUT_N * 5U)));
+                                    (u16IdleMs >= (FAULT_SCI_TIMEOUT_N * 5U)));
         Fault_Level(&stFault.slow, &stFaultCnt.run.sci, FAULT_BIT_SCI,
                     u16SciHit, FAULT_N_SCI,
-                    (Uint16)(UartProto_CmdIdleMs() < (FAULT_SCI_TIMEOUT_N * 5U)),
+                    (Uint16)(u16IdleMs < (FAULT_SCI_TIMEOUT_N * 5U)),
                     FAULT_N_SCI_REC);
     }
 }
@@ -583,26 +532,13 @@ static void Fault_SlowProtect5ms(const FaultSnap_t *p)
 static void Fault_CmpssRecTick(Uint32 u32Bit, Uint16 u16Ok, Uint16 *pu16Rec,
                                Uint16 u16LatchSrc)
 {
-    if ((stFault.slow & u32Bit) == 0UL)   /* ① 位未置位：无需恢复，清计数 */
-    {
-        *pu16Rec = 0U;
-        return;
-    }
-    if (u16Ok == 0U)                      /* ② 安全条件不成立：重新计时，保持锁存 */
-    {
-        *pu16Rec = 0U;
-        return;
-    }
-    if (*pu16Rec < FAULT_N_CMPSS_REC)
-    {
-        (*pu16Rec)++;
-    }
-    if (*pu16Rec >= FAULT_N_CMPSS_REC)
+    if (Fault_RecCntTick(pu16Rec,
+                         (Uint16)((stFault.slow & u32Bit) != 0UL),
+                         u16Ok, FAULT_N_CMPSS_REC) != 0U)
     {
         Fault_ClearBit(&stFault.slow, u32Bit);
         /* 只清本路比较器锁存，保留 ePWM OST；他路锁存不动 */
         DabCmpss_ClearFilterLatchSrc(u16LatchSrc);
-        *pu16Rec = 0U;
     }
 }
 
@@ -670,8 +606,8 @@ static void Fault_ClearAll(void)
 /**
  * @brief 开路测试门控：屏蔽 run / 保留 over。
  *
- * 欠压、继电器、SCI 属于"非过"类，测试期间必然异常，直接清位并清计数；
- * 关断电流（alm 字）测试期间同样放行，单独清 alm 对应位；
+ * 母线欠压、电池欠压、继电器、SCI、软起超时属"非过"类，测试期间清位并清计数；
+ * 关断电流（alm 字）测试期间同样放行；
  * over（过压/过流/过功率/CMPSS/短路等）与 alm.lock/hardalm 一律不动。
  */
 static void Fault_OpenTestGate5ms(const FaultSnap_t *p)
@@ -683,6 +619,7 @@ static void Fault_OpenTestGate5ms(const FaultSnap_t *p)
 
     Fault_ClearBit(&stFault.slow,
                    FAULT_MASK(FAULT_BIT_VBUS_UN) |
+                   FAULT_MASK(FAULT_BIT_BAT_UV) |
                    FAULT_MASK(FAULT_BIT_RELAY) |
                    FAULT_MASK(FAULT_BIT_SCI) |
                    FAULT_MASK(FAULT_BIT_SOFT_TO));
@@ -690,6 +627,8 @@ static void Fault_OpenTestGate5ms(const FaultSnap_t *p)
 
     stFaultCnt.run.vbusUn.trip  = 0U;
     stFaultCnt.run.vbusUn.rec   = 0U;
+    stFaultCnt.run.batUv.trip   = 0U;
+    stFaultCnt.run.batUv.rec    = 0U;
     stFaultCnt.run.sci.trip     = 0U;
     stFaultCnt.run.sci.rec      = 0U;
     stFaultCnt.run.offCurrHit   = 0U;
@@ -700,9 +639,15 @@ static void Fault_OpenTestGate5ms(const FaultSnap_t *p)
  *
  * 运行中或开机请求仍为 1 时丢弃命令，避免清 soft/lock/hardalm 后被 ISR/状态机
  * 按旧 RUN 继续控，或清完立刻自动起机。OST 不在此解除。
+ *
+ * 运行请求直接读 CfgParam（与 clearfaultcmd 同源），口径同 SM_SyncSysCmd 的
+ * shutdown 合成式；不回调状态机同步，避免故障模块反向依赖 SM。
+ * SysCmd 镜像仍由 UART/CAN 写命令时与 2ms UpdateShutdownFlag 负责刷新。
  */
 static void Fault_ClearCmd5ms(void)
 {
+    Uint16 u16RunReq;
+
     if (CfgParam.SysCmd.bit.clearfaultcmd == 0U)
     {
         return;
@@ -710,13 +655,14 @@ static void Fault_ClearCmd5ms(void)
 
     /* 消费命令位：通信写 CfgParam.SysCmd 与本函数同在主循环超循环内顺序执行，
      * 不存在抢占，故无需关中断 */
-        CfgParam.SysCmd.bit.clearfaultcmd = 0U;
+    CfgParam.SysCmd.bit.clearfaultcmd = 0U;
 
-    /* CAN 0x20 只改 CfgParam，这里先同步再判停机门槛 */
-    SM_SyncSysCmd();
+    /* 与 SM_SyncSysCmd：shutdown = onoffcmd || openTest */
+    u16RunReq = (Uint16)((CfgParam.SysCmd.bit.onoffcmd != 0U) ||
+                         (CfgParam.SysCmd.bit.openTest != 0U));
 
     /* 停机门槛：无运行请求，且状态机已回 INIT */
-    if ((FAULT_RUN_REQ() != 0U) || (RunState.state != SM_STATE_INIT))
+    if ((u16RunReq != 0U) || (RunState.state != SM_STATE_INIT))
     {
         return;
     }
@@ -742,38 +688,47 @@ Uint16 Fault_PreStartHwOk(void)
  * ========================================================================== */
 
 /**
- * @brief 5ms 周期调用的快保护恢复任务（各位独立判断，5s 安全延时）
- *
- * @param f32Vbus  本拍继电器 VM 母线电压
- * @param f32I0    通道 0 电流
- * @param f32I1    通道 1 电流
+ * @brief 快保护恢复（5ms；各位独立，连续 FAULT_FAST_REC_N 拍安全才清位）
  */
 static void Fault_FastRecover5ms(float f32Vbus, float f32I0, float f32I1)
 {
-    Uint16 u16Ok[FAST_BIT_COUNT];
-    Uint16 u16Idx;
-
-    /* lock / hardalm 任一置位：快保护进入锁定态，不再自动恢复，
-     * 各恢复计数保持清零，解除锁定后须重新连续满足 5s 才允许恢复 */
+    /* lock / hardalm：禁止自动恢复，计数清零 */
     if ((stFault.alm & (ALM_MASK_LOCK | ALM_MASK_HARDALM)) != 0U)
     {
-        for (u16Idx = 0U; u16Idx < FAST_BIT_COUNT; u16Idx++)
-        {
-            stFaultCnt.run.fastRec[u16Idx] = 0U;
-        }
+        stFaultCnt.run.fastRec[FAST_BIT_VOUT_OV]  = 0U;
+        stFaultCnt.run.fastRec[FAST_BIT_I1_OV]    = 0U;
+        stFaultCnt.run.fastRec[FAST_BIT_I2_OV]    = 0U;
+        stFaultCnt.run.fastRec[FAST_BIT_IBALANCE] = 0U;
         return;
     }
 
-    /* ---- 各故障位对应的安全条件（迟滞阈值见 App_Fault.h §1）---- */
-    u16Ok[FAST_BIT_VOUT_OV]  = (Uint16)(f32Vbus <= FAULT_FAST_OV_REC);
-    u16Ok[FAST_BIT_I1_OV]    = (Uint16)(Fault_Abs(f32I0) <= FAULT_CH_OC_REC);
-    u16Ok[FAST_BIT_I2_OV]    = (Uint16)(Fault_Abs(f32I1) <= FAULT_CH_OC_REC);
-    u16Ok[FAST_BIT_IBALANCE] = (Uint16)(Fault_ImbHit(f32I0, f32I1) == 0U);
-
-    for (u16Idx = 0U; u16Idx < FAST_BIT_COUNT; u16Idx++)
+    if (Fault_RecCntTick(&stFaultCnt.run.fastRec[FAST_BIT_VOUT_OV],
+                         (Uint16)((stFault.fast & FAST_MASK_VOUT_OV) != 0U),
+                         (Uint16)(f32Vbus <= FAULT_FAST_OV_REC),
+                         FAULT_FAST_REC_N) != 0U)
     {
-        Fault_FastRecTick(&stFault.fast, FAULT_MASK16(u16Idx),
-                          u16Ok[u16Idx], &stFaultCnt.run.fastRec[u16Idx]);
+        stFault.fast &= (Uint16)(~FAST_MASK_VOUT_OV);
+    }
+    if (Fault_RecCntTick(&stFaultCnt.run.fastRec[FAST_BIT_I1_OV],
+                         (Uint16)((stFault.fast & FAST_MASK_I1_OV) != 0U),
+                         (Uint16)(Fault_Abs(f32I0) <= FAULT_CH_OC_REC),
+                         FAULT_FAST_REC_N) != 0U)
+    {
+        stFault.fast &= (Uint16)(~FAST_MASK_I1_OV);
+    }
+    if (Fault_RecCntTick(&stFaultCnt.run.fastRec[FAST_BIT_I2_OV],
+                         (Uint16)((stFault.fast & FAST_MASK_I2_OV) != 0U),
+                         (Uint16)(Fault_Abs(f32I1) <= FAULT_CH_OC_REC),
+                         FAULT_FAST_REC_N) != 0U)
+    {
+        stFault.fast &= (Uint16)(~FAST_MASK_I2_OV);
+    }
+    if (Fault_RecCntTick(&stFaultCnt.run.fastRec[FAST_BIT_IBALANCE],
+                         (Uint16)((stFault.fast & FAST_MASK_IBALANCE) != 0U),
+                         (Uint16)(Fault_ImbHit(f32I0, f32I1) == 0U),
+                         FAULT_FAST_REC_N) != 0U)
+    {
+        stFault.fast &= (Uint16)(~FAST_MASK_IBALANCE);
     }
 }
 
@@ -784,16 +739,16 @@ static void Fault_FastRecover5ms(float f32Vbus, float f32I0, float f32I1)
 /**
  * @brief 故障模块初始化（仅上电调用一次）
  *
- * 全量清零三整字故障与全部计数（含 retry 锁定组），并清 CMPSS 滤波锁存、
- * 清 ePWM Trip 状态解除硬件封波。
+ * 经 Fault_ClearAll 清三整字故障、run 计数与 CMPSS 滤波锁存，另行清零
+ * retry 锁定组，并清 ePWM Trip 状态解除硬件封波。
  * 与运行期清故障（Fault_ClearAll）的区别：只有上电才允许清 retry 组与
  * ePWM OST —— 运行期"反复跳闸 → 清故障 → 再跳闸"无法绕过锁定保护，
  * 而上电时系统尚未起机，解除 OST 安全。
  */
 void Fault_Init(void)
 {
-    memset(&stFaultCnt, 0, sizeof(stFaultCnt));
-    Fault_ClearAll();
+    Fault_ClearAll();                                            /* 清 stFault + stFaultCnt.run + CMPSS 滤波锁存 */
+    memset(&stFaultCnt.retry, 0, sizeof(stFaultCnt.retry));      /* retry 组仅上电清零 */
     DabCmpss_ClearTrip();   /* 仅上电清 ePWM TZ；运行期清故障保留 OST 到起机提交 */
 }
 
@@ -816,101 +771,48 @@ void Fault_ClearRelay(void)
     Fault_ClearBit(&stFault.slow, FAULT_MASK(FAULT_BIT_RELAY));
 }
 
-/**
- * @brief 置位软起超时（slow.softTo）；仅本文件调用
- */
-static void Fault_SetSoftTo(void)
+/** @brief 置位软起超时（由 SM_SoftStartTick5ms 调用） */
+void Fault_SetSoftTo(void)
 {
     Fault_SetBit(&stFault.slow, FAULT_MASK(FAULT_BIT_SOFT_TO));
 }
 
-/**
- * @brief 清除软起超时位
- */
+/** @brief 清除软起超时位 */
 void Fault_ClearSoftTo(void)
 {
     Fault_ClearBit(&stFault.slow, FAULT_MASK(FAULT_BIT_SOFT_TO));
 }
 
 /**
- * @brief 软起超时（5ms）：armed 且本态 softStartTick 连续满 50s → softTo
- * @note  tick 随 EnterState 清零；armed 由进 RUN 当场清（在线换向不再监视）
- */
-static void Fault_SoftStartTick5ms(void)
-{
-    if (RunState.softStartArmed == 0U)
-    {
-        return;
-    }
-    if (RunState.state == SM_STATE_INIT)
-    {
-        return;
-    }
-    if (RunState.softStartTick < FAULT_N_SOFT_TO)
-    {
-        RunState.softStartTick++;
-    }
-    if (RunState.softStartTick >= FAULT_N_SOFT_TO)
-    {
-        Fault_SetSoftTo();
-    }
-}
-
-/**
- * @brief 5ms 周期故障检测主函数
- *
- * 调用时机：由 5ms 定时任务调度器周期调用。
- *
- * ── 执行流程（顺序敏感，勿随意调换）──────────────────
- *   1. 本拍快照（ADC / PWM / 开路测试标志）
- *   2. 开路测试门控：屏蔽 run / 保留 over
- *   3. clearfaultcmd：当拍消费
- *   4. CMPSS 硬件锁存源 → slow.cmpss*
- *   5. 慢保护 ①~⑦
- *   6. 软起超时（冷启武装且本态连续 50s）
- *   7. 重复触发锁定（短路 / 快保护 → lock；CMPSS → hardalm）
- *   8. 快保护恢复（5s 安全延时）
- * ─────────────────────────────────────────────────────
+ * @brief 5ms 故障主流程（顺序敏感，见说明文档 §2.2；软起计时在 SM）
  */
 void Fault_Detect5ms(void)
 {
     FaultSnap_t snap;
-    Uint16      u16ShortEvent;           /* 短路保护事件（30s / 3 次 → lock） */
-    Uint32      u32CmpssEvent;           /* CMPSS 慢保护事件字（5min / 5 次 → hardalm） */
+    Uint16      u16ShortEvent;
+    Uint16      u16CmpssEvent;
 
-    Fault_TakeSnap(&snap);                                  /* 1. 本拍快照 */
-    Fault_OpenTestGate5ms(&snap);                            /* 2. 开路测试门控 */
-    Fault_ClearCmd5ms();                                     /* 3. 清故障命令 */
-    Fault_CmpssSrc5ms(&snap);                                /* 4. CMPSS → slow */
+    Fault_TakeSnap(&snap);
+    Fault_OpenTestGate5ms(&snap);
+    Fault_ClearCmd5ms();
+    Fault_CmpssSrc5ms(&snap);
+    Fault_SlowProtect5ms(&snap);
 
-    Fault_SlowProtect5ms(&snap);                             /* 5. 慢保护 ①~⑦ */
-    Fault_SoftStartTick5ms();                                /* 6. 软起超时 */
-
-    /* ---- 6. 重复触发锁定（固定窗口计数，机制见 Fault_RetryLockTick）----
-     * 事件按"上升沿"计次：上一拍为 0 且本拍非 0 才计 1 次，
-     * 持续存在的故障不重复计次；上一拍存于 run.u16ShortPrev / u32CmpssPrev。
-     *   shortLock ：事件 = 短路保护发生（slow 的 busShort 位上升沿）
-     *               30s 窗口内满 FAULT_N_LOCK_HIT(3) 次 → alm.lock
-     *               （窗口须明显大于"5s 恢复 + 重启"一轮耗时；原 5s 短窗口
-     *                的突发短路场景是本窗口的子集，统一合并到此）
-     *   cmpssLock ：事件 = slow 中 CMPSS 位
-     *               5min 窗口内满 FAULT_N_CMPSS_LOCK_HIT(5) 次 → alm.hardalm
-     * lock/hardalm：快保护不再自动恢复（见 §7），只能清故障或重新上电；
-     * retry 组不受清故障影响，防止"反复跳→清→再跳"绕过保护。 */
+    /* 上升沿计次 → shortLock / cmpssLock（过流两位，不含 bit7） */
     u16ShortEvent = (Uint16)((stFault.slow & FAULT_MASK(FAULT_BIT_SHORT)) != 0UL);
-    u32CmpssEvent = stFault.slow & CMPSS_MASK;
+    u16CmpssEvent = (Uint16)((stFault.slow & CMPSS_OCP_MASK) != 0UL);
     Fault_RetryLockTick(&stFaultCnt.retry.shortLock,
                         (Uint16)((stFaultCnt.run.u16ShortPrev == 0U) &&
                                  (u16ShortEvent != 0U)),
                         FAULT_N_LOCK_HIT, FAULT_N_SHORT_LOCK_WIN,
                         ALM_MASK_LOCK);
     Fault_RetryLockTick(&stFaultCnt.retry.cmpssLock,
-                        (Uint16)((stFaultCnt.run.u32CmpssPrev == 0UL) &&
-                                 (u32CmpssEvent != 0UL)),
+                        (Uint16)((stFaultCnt.run.u16CmpssPrev == 0U) &&
+                                 (u16CmpssEvent != 0U)),
                         FAULT_N_CMPSS_LOCK_HIT, FAULT_N_CMPSS_LOCK_WIN,
                         ALM_MASK_HARDALM);
-    stFaultCnt.run.u16ShortPrev  = u16ShortEvent;
-    stFaultCnt.run.u32CmpssPrev  = u32CmpssEvent;
+    stFaultCnt.run.u16ShortPrev = u16ShortEvent;
+    stFaultCnt.run.u16CmpssPrev = u16CmpssEvent;
 
-    Fault_FastRecover5ms(snap.f32Vbus, snap.f32I0, snap.f32I1);  /* 8. 快保护恢复 */
+    Fault_FastRecover5ms(snap.f32Vbus, snap.f32I0, snap.f32I1);
 }

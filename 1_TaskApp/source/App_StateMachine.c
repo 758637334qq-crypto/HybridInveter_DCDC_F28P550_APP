@@ -460,8 +460,8 @@ void SM_Standby_100us(void)
  *   ① SM_SyncSysCmd(): 先刷新命令镜像, 本拍后续判断全部基于最新指令;
  *   ② 停机三触发(任一成立即整备停机):
  *      a. FAULT_ANY()  —— 任意快/慢/alm 故障字非零;
- *      b. faultcmd     —— 上位机请求清故障: 清零动作仅允许在停机态执行
- *                         (Fault_ClearCmd5ms 的前置条件), 故先回 INIT;
+ *      b. faultcmd     —— 上位机请求进故障停机: 清故障动作仅允许在 INIT
+ *                         (Fault_ClearCmd5ms 自读 CfgParam 判门槛), 故先回 INIT;
  *      c. shutdown==0  —— 协议层要求关机(onoffcmd=0 或 openTest=1);
  *   ③ 故障快照: fast/slow/alm 各自仅在非零时写入 SaveAlarm —— 持续快照"最后
  *      一次非零故障", 不会被后续零值覆盖, 供上位机事后追溯停机原因;
@@ -765,7 +765,7 @@ void SM_Init(void)
  *   ③ staFlag 位图发布: 每拍按当前态重建(1U<<state), 上位机观测专用;
  *   ④ RAMP_CLOSE 最短驻留: 尾部 stateTick++（进态清零，与软起超时无关）;
  *   ⑤ openTestTime: 开环测试或 RUN 发波时长观测。
- * 软起超时在 Fault_Detect5ms（Fault_SoftStartTick5ms），不在此调用。
+ * 软起超时在 SM_SoftStartTick5ms（Task_5ms，Fault_Detect5ms 之后），不在此调用。
  *
  * 【重难点·执行顺序】①与②的先后不可调换: 若先分发后裁决, 故障拍内旧态句柄
  * 仍会执行一次(如 RAMP_CLOSE 判完成进 RUN), 虽然下一拍会被裁决拉回, 但多出
@@ -801,5 +801,26 @@ void SM_Step_2ms(void)
     if ((CfgParam.SysCmd.bit.openTest != 0U) || (RunState.state == SM_STATE_RUN))
     {
         RunState.openTestTime++;                   /* ⑤ 发波时长观测计数 */
+    }
+}
+
+/**
+ * @brief  5ms 软起超时：计时归属本模块；满门限只调 Fault_SetSoftTo 置位
+ * @note   tick 随 EnterState 清零；armed 由进 RUN 当场清；须在 Fault_Detect5ms
+ *         之后调用（开路测试门控已清 softTo 后本拍可再置，行为与原内嵌一致）
+ */
+void SM_SoftStartTick5ms(void)
+{
+    if ((RunState.softStartArmed == 0U) || (RunState.state == SM_STATE_INIT))
+    {
+        return;
+    }
+    if (RunState.softStartTick < FAULT_N_SOFT_TO)
+    {
+        RunState.softStartTick++;
+    }
+    if (RunState.softStartTick >= FAULT_N_SOFT_TO)
+    {
+        Fault_SetSoftTo();
     }
 }

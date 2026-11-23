@@ -149,7 +149,7 @@ typedef struct
     Uint16     workMode;                            /**< 当前实际工作模式 (WorkMode_e)：ISR/任务共享，单 16 位原子 */
 
     Uint16     stateTick;                           /**< 通用阶段计时：RELAY/GPIO/PRECHECK/RAMP_CLOSE 最短驻留；进态清零 */
-    Uint16     softStartTick;                       /**< 软起本态计时(5ms)；EnterState 清零；armed 下满 50s→softTo */
+    Uint16     softStartTick;                       /**< 软起本态计时(5ms，SM_SoftStartTick5ms)；EnterState 清零；满→Fault_SetSoftTo */
     Uint16     softStartArmed;                      /**< 1=冷启监视中（首次 RUN 当场清；在线换向不再套 50s） */
     Uint16     relayStable;                         /**< RELAY 压差连续平稳计数（与超时并行，不能并进 stateTick） */
     Uint16     precheckLowCnt;                      /**< 预检窗内低压命中次数（非计时） */
@@ -186,9 +186,14 @@ void SM_Init(void);
 void SM_Step_2ms(void);
 
 /**
- * @brief  从 CfgParam.SysCmd 同步运行命令字（串口 0x00 / CAN 0x20 / 2ms / 清故障共用）
+ * @brief  从 CfgParam.SysCmd 同步运行命令字（串口 0x00 / CAN 0x20 / 2ms 共用）
  */
 void SM_SyncSysCmd(void);
+
+/**
+ * @brief  5ms：软起超时计时；armed 且本态满 FAULT_N_SOFT_TO → Fault_SetSoftTo
+ */
+void SM_SoftStartTick5ms(void);
 
 /**
  * @brief  100us：工况仲裁 + 换向进 STANDBY（强制 5 拍 / 自动 1 拍）后装载回 RAMP_CLOSE
