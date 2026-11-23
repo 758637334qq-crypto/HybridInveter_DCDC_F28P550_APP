@@ -280,19 +280,19 @@ static Uint16 Fault_OpenTest(void)
 
 /**
  * @brief 采集本拍 ADC 特征值与状态标志（一次性读取，保证同拍口径一致）
- * @param p  输出快照
+ * @note  VM/I0/I1 用 10ms 滤波（5ms 慢保护口径）；关断电流仍用 100ms
  */
 static void Fault_TakeSnap(FaultSnap_t *p)
 {
-    float f32Vbus = stADC.VmBusVolt.f32IsrResult;    /* 母线唯一控制/保护电压源 */
-    float f32I0 = stADC.BusCurr1.f32IsrResult;
-    float f32I1 = stADC.BusCurr2.f32IsrResult;
+    float f32Vbus = stADC.VmBusVolt.Filt.f32Filt10ms;
+    float f32I0   = stADC.BusCurr1.Filt.f32Filt10ms;
+    float f32I1   = stADC.BusCurr2.Filt.f32Filt10ms;
 
-    p->f32Vbus  = f32Vbus;                           /* 继电器 VM 母线电压 */
+    p->f32Vbus  = f32Vbus;
     p->f32I0    = f32I0;
     p->f32I1    = f32I1;
-    p->f32Iabs  = Fault_Abs(f32I0 + f32I1);          /* |Ibus1 + Ibus2| */
-    p->f32Islow = Fault_Abs(                         /* 100ms 滤波后的总电流绝对值 */
+    p->f32Iabs  = Fault_Abs(f32I0 + f32I1);
+    p->f32Islow = Fault_Abs(
         stADC.BusCurr1.Filt.f32Filt100ms + stADC.BusCurr2.Filt.f32Filt100ms);
 
     p->u16PwmOn    = Fault_PwmOn();
@@ -449,12 +449,12 @@ static void Fault_SlowProtect5ms(const FaultSnap_t *p)
 {
     Uint16 u16OtherFault;               /* ④ 判据：除欠压外的其它故障 */
 
-    /* 电池欠压：开路测试不判（门控每拍清位兜底）；滤波下限不可靠，用原始采样。 */
+    /* 电池欠压：开路测试不判（门控每拍清位兜底）；用 100ms 滤波值。 */
     Fault_Level(&stFault.slow, &stFaultCnt.run.batUv, FAULT_BIT_BAT_UV,
                 (Uint16)((p->u16OpenTest == 0U) &&
-                         (stADC.BatVolt.f32IsrResult < FAULT_BAT_UV_V)),
+                         (stADC.BatVolt.Filt.f32Filt100ms < FAULT_BAT_UV_V)),
                 FAULT_N_BAT_UV,
-                (Uint16)(stADC.BatVolt.f32IsrResult > FAULT_BAT_UV_REC_V),
+                (Uint16)(stADC.BatVolt.Filt.f32Filt100ms > FAULT_BAT_UV_REC_V),
                 FAULT_N_BAT_UV_REC);
 
     /* ---- ① 母线过压 ---- */
@@ -570,14 +570,7 @@ static void Fault_CmpssSrc5ms(const FaultSnap_t *p)
 {
     (void)Fault_CmpssApplySrc(DabCmpss_ReadTripSrc());
 
-    if ((stFault.alm & ALM_MASK_HARDALM) != 0U)
-    {
-        stFaultCnt.run.cmpssVRec  = 0U;
-        stFaultCnt.run.cmpssI1Rec = 0U;
-        stFaultCnt.run.cmpssI2Rec = 0U;
-        return;
-    }
-
+    /* CMPSS 位按自身条件恢复；与 alm.hardalm 解耦（锁定只管拦起机） */
     Fault_CmpssRecTick(FAULT_MASK(FAULT_BIT_CMPSS_VBUS_OVP),
                        (Uint16)(p->f32Vbus < FAULT_CMPSS_V_REC),
                        &stFaultCnt.run.cmpssVRec,
@@ -692,16 +685,7 @@ Uint16 Fault_PreStartHwOk(void)
  */
 static void Fault_FastRecover5ms(float f32Vbus, float f32I0, float f32I1)
 {
-    /* lock / hardalm：禁止自动恢复，计数清零 */
-    if ((stFault.alm & (ALM_MASK_LOCK | ALM_MASK_HARDALM)) != 0U)
-    {
-        stFaultCnt.run.fastRec[FAST_BIT_VOUT_OV]  = 0U;
-        stFaultCnt.run.fastRec[FAST_BIT_I1_OV]    = 0U;
-        stFaultCnt.run.fastRec[FAST_BIT_I2_OV]    = 0U;
-        stFaultCnt.run.fastRec[FAST_BIT_IBALANCE] = 0U;
-        return;
-    }
-
+    /* 各位按自身安全条件恢复；与 alm.lock / hardalm 解耦（锁定只管拦起机） */
     if (Fault_RecCntTick(&stFaultCnt.run.fastRec[FAST_BIT_VOUT_OV],
                          (Uint16)((stFault.fast & FAST_MASK_VOUT_OV) != 0U),
                          (Uint16)(f32Vbus <= FAULT_FAST_OV_REC),
