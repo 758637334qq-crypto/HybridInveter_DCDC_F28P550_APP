@@ -28,11 +28,12 @@
 #define FAULT_I_STUCK              (1.0f)      /* 关断电流异常门限：停机后 100ms 滤波电流 */
 
 /* ---- 快保护阈值（Fault_FastProtect 在 ISR 中判据，通道 0/1 共用）---- */
+#define FAULT_FAST_OV              (530.0f)              /* 母线快过压触发：VM > 阈值 */
+#define FAULT_FAST_OV_REC          (FAULT_FAST_OV - 20.0f) /* 快过压恢复：触发阈值 -20V */
 #define FAULT_CH_OC                (28.0f)               /* 单通道过流触发：|I| > 阈值 */
 #define FAULT_CH_OC_REC            (FAULT_CH_OC - 5.0f)  /* 单通道过流恢复（迟滞 5A） */
 #define FAULT_CH_IMB_A             (2.0f)                /* 不平衡判据：电流绝对下限 */
 #define FAULT_CH_IMB_RATIO         (0.30f)               /* 不平衡判据：|I0-I1| 相对 |I0+I1| 的比例 */
-#define FAULT_FAST_OV_REC          (DAB_DISCHARGE_BUS_OVP_VOLT - 20.0f) /* 快过压恢复：软件触发阈值 -20V */
 
 /* ---- CMPSS 分路恢复条件（各路独立连续 FAULT_N_CMPSS_REC 拍，见 Fault_CmpssRecTick）---- */
 #define FAULT_CMPSS_V_REC          (400.0f)    /* 母线过压跳闸恢复：VM < 400V */
@@ -51,7 +52,7 @@
 #define FAULT_N_SHORT_REC          (40U)      /* 短路恢复 40 拍 = 200ms */
 #define FAULT_N_STUCK              (2000U)    /* 关断电流异常确认 2000 拍 = 10s（置位后不自动恢复） */
 #define FAULT_N_CMPSS_REC          (2000U)    /* CMPSS 单路恢复 2000 拍 = 10s */
-#define FAULT_SCI_TIMEOUT_N        (2000U)    /* SCI 空闲超时门限：空闲计数 >= 10s 判通讯超时 */
+#define FAULT_SCI_TIMEOUT_N        (2000U)    /* SCI 掉线门限：有效 0x00 命令空闲 >= 10s（2000×5ms） */
 #define FAULT_N_SCI                (1U)       /* SCI 故障触发 1 拍（当拍即触发） */
 #define FAULT_N_SCI_REC            (2U)       /* SCI 故障恢复 2 拍 = 10ms */
 
@@ -81,8 +82,9 @@ typedef char RetryWinCheck_t[((FAULT_N_SHORT_LOCK_WIN <= 65535U) &&
 #define FAULT_FAST_IMB_N           (300U)     /* 不平衡确认 300 拍（远宽于 OV/OC，防瞬态误锁） */
 #define FAULT_FAST_REC_N           (1000U)    /* 快保护恢复延时 1000 拍 × 5ms = 5s */
 
-/* SysCmd.bit.shutdown：1=允许运行，0=关机请求 */
-#define FAULT_RUN_REQ()            (SysCmd.bit.shutdown != 0U)
+/* 运行请求直接读 CfgParam.SysCmd（与 SM_SyncSysCmd 合成的 shutdown = onoffcmd || openTest 同源） */
+#define FAULT_OPEN_TEST()          (CfgParam.SysCmd.bit.openTest != 0U)
+#define FAULT_RUN_REQ()            ((CfgParam.SysCmd.bit.onoffcmd != 0U) || FAULT_OPEN_TEST())
 
 /* ==========================================================================
  * §2 位号（协议位序）与掩码
@@ -115,16 +117,10 @@ typedef enum
 
 typedef enum
 {
-    ALM_BIT_LOCK = 0,            /* bit0  重复短路锁定：30s 窗口 3 次短路保护（§6 锁定） */
+    ALM_BIT_LOCK = 0,            /* bit0  重复短路锁定：30s 窗口 3 次短路保护 */
     ALM_BIT_HARDALM,             /* bit1  CMPSS 重复过流锁定：5min 窗口 5 次 */
     ALM_BIT_OFF_CURR             /* bit2  关断电流异常：停机请求后仍有电流（不自动恢复） */
 } FaultAlmBit_e;
-
-typedef char FastBitMapCheck_t[((FAST_BIT_VOUT_OV == 0) &&
-                                (FAST_BIT_I1_OV == 1) &&
-                                (FAST_BIT_I2_OV == 2) &&
-                                (FAST_BIT_IBALANCE == 3) &&
-                                (FAST_BIT_COUNT == 4)) ? 1 : -1];
 
 #define FAULT_MASK(bit)            ((Uint32)1UL << (bit))
 #define FAULT_MASK16(bit)          ((Uint16)(1U << (bit)))

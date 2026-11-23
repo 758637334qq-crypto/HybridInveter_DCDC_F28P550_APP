@@ -13,6 +13,8 @@
 /* 全局采样池：全工程只在这一处定义（含采样数据 + 校准参数） */
 volatile ST_ADC_POOL stADC;
 
+static Uint16 s_u16BatVolt100msSeeded;
+
 /* 用瞬时值并行推进三档一阶低通 */
 static inline void AdcLpf3Update(volatile ST_ADC_LPF3 *pFilt, float32 fIn)
 {
@@ -28,6 +30,7 @@ void AdcCtrlInit(void)
 {
     /* 整池清零，避免上电垃圾值进控制/滤波状态；电流零点回到中点 */
     memset((void *)&stADC, 0, sizeof(stADC));
+    s_u16BatVolt100msSeeded = 0U;
     stADC.CurrOffset.f32Idd1 = BUS_CURR_MID_ADC;
     stADC.CurrOffset.f32Idd2 = BUS_CURR_MID_ADC;
 }
@@ -91,7 +94,15 @@ void AdcDabFilt1ms(void)
     AdcLpf3Update(&stADC.BusCurr2.Filt, stADC.BusCurr2.f32IsrResult);
 
     static ST_ADC_LPF3 st_lpf3 = {0.0f};
-    AdcLpf3Update(&st_lpf3, stADC.BatVolt.f32IsrResult);
+    const float32 f32BatVolt = stADC.BatVolt.f32IsrResult;
+
+    /* 欠压保护使用 100ms 滤波：首拍用实测值初始化，消除从 0V 爬升导致的误报。 */
+    if (s_u16BatVolt100msSeeded == 0U)
+    {
+        st_lpf3.f32Filt100ms = f32BatVolt;
+        s_u16BatVolt100msSeeded = 1U;
+    }
+    AdcLpf3Update(&st_lpf3, f32BatVolt);
 
     /* 电池电压 10ms 滤波值先限幅到合法区间 [DAB_BAT_VOLT_MIN, 65V] 再发布：
      * 上电时滤波器从 0 爬升、以及瞬时越界都会夹回区间内，下游只取值不再判范围。 */
