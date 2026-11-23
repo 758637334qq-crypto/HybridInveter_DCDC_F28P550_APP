@@ -3,7 +3,7 @@
  * 文件名称: App_StateMachine.h
  * 模块功能: DAB (双有源全桥变换器) 主状态机头文件
  * 控制核心: 充放电全工况统一闭环控制高压直流母线电压 (Vbus) 与母线电流 (Ibus)
- * 调度周期: 严格基于 2ms 独立时基调度
+ * 任务周期：主状态处理 2 ms，待机与换向 100 µs，软起超时计时 5 ms
  * 版权说明: 最终量产定版 (Production Ready)
  * ============================================================================
  *
@@ -36,7 +36,7 @@ typedef enum
 } WorkMode_e;
 
 /**
- * @brief 主状态机状态枚举 (8状态严密闭环架构)
+ * @brief 主状态机状态枚举（7 个正常状态，1 个预留值）
  */
 typedef enum
 {
@@ -79,7 +79,7 @@ typedef enum
 #define SM_N_PRECHECK_WIN             (20U)         /**< 预检滑动窗 40ms */
 #define SM_N_PRECHECK_TH              (15U)         /**< 窗内「PCS < 设定值」命中门限 → 放电（无死区带，靠多数票抑制带内抖动） */
 #define SM_N_IREF_DEBOUNCE            (4U)          /**< RUN：电流给定换向确认 ≈400µs */
-#define SM_N_VOLT_DEBOUNCE            (10U)         /**< >=RAMP_CLOSE：电压换向确认 ≈1ms */
+#define SM_N_VOLT_DEBOUNCE            (10U)         /**< 仅 RUN 计票：连续 10 个 100 µs 节拍约为 1 ms */
 
 
 /* ==========================================================================
@@ -155,7 +155,7 @@ typedef struct
     Uint16     precheckLowCnt;                      /**< 预检窗内低压命中次数（非计时） */
 
     Uint16     irefDebounce;                        /**< RUN：电流给定换向确认（400µs）；满计目标=反向 */
-    Uint16     voltDebounce;                        /**< >=CLOSE：电压换向确认（1ms）；满计目标=反向 */
+    Uint16     voltDebounce;                        /**< 仅 RUN 计票，满计表示电压条件确认需要反向 */
     Uint16     standbyDwellN;                       /**< 本趟 STANDBY 目标驻留拍数（100µs） */
 
     Uint32     openTestTime;                        /**< 调试与发波累计运行时长计数器 */
@@ -163,6 +163,9 @@ typedef struct
     CanCmd_e   canCmd;                              /**< CAN 远程总线调度模式指令 */
     Uint16     isMaster;                            /**< 主/从机工作角色标志 (1:主机, 0:从机) */
     Uint16     curLowSealing;                       /**< 禁止方向位图 (bit0:禁充电, bit1:禁放电, 0:双向可用) */
+
+    float      f32ColdDis;                          /**< PRECHECK 判向当拍有效放电限值(A)：冷启装载直接复用，不重算 */
+    float      f32ColdChg;                          /**< PRECHECK 判向当拍有效充电限值(A)：冷启装载直接复用，不重算 */
 } RunState_t;
 
 /* ==========================================================================
@@ -200,4 +203,4 @@ void SM_SoftStartTick5ms(void);
  */
 void SM_Standby_100us(void);
 
-#endif /* TASK_STATE_MACHINE_H */
+#endif /* APP_STATE_MACHINE_H */

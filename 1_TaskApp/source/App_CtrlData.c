@@ -253,6 +253,16 @@ static void sLimitSealSynth(float *pf32Dis, float *pf32Chg, Uint16 *pu16Seal)
     *pu16Seal = u16SealTmp;
 }
 
+/* 全量计算有效给定+禁向位图：与冷启/1ms 斜坡共用 sLimitSealSynth，供 PRECHECK
+ * 判向拍一次算出，结果经 RunState.f32ColdDis/f32ColdChg 交冷启装载复用。 */
+Uint16 Ctrl_CalcGiven(float *pf32Dis, float *pf32Chg)
+{
+    Uint16 u16Seal;
+
+    sLimitSealSynth(pf32Dis, pf32Chg, &u16Seal);
+    return u16Seal;
+}
+
 /*==============================================================================
  * 起机与换向装载
  *============================================================================*/
@@ -372,8 +382,19 @@ static void sRampInitCommon(float f32VoltFbk, Uint16 u16IsCold)
     float f32ChgAbs;
     Uint16 u16Seal;
 
-    sLimitSealSynth(&f32Dis, &f32Chg, &u16Seal);
-    RunState.curLowSealing = u16Seal;
+    if (u16IsCold == 1U)
+    {
+        /* 冷启：复用 PRECHECK 判向当拍落位的有效给定（同拍口径，不重算，
+         * 保证判向、装载、1ms 爬坡三处单一规则） */
+        f32Dis = RunState.f32ColdDis;
+        f32Chg = RunState.f32ColdChg;
+        u16Seal = RunState.curLowSealing;
+    }
+    else
+    {
+        sLimitSealSynth(&f32Dis, &f32Chg, &u16Seal);
+        RunState.curLowSealing = u16Seal;
+    }
 
     f32VoltRef = sClampF((float)CfgParam.BusVolSet * 0.1f, DAB_VOLT_MIN, DAB_VOLT_MAX);
 

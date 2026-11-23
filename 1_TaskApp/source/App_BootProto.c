@@ -173,7 +173,7 @@ void BootProto_RxByte(uint16_t byte)
 /*------------------------------------------------------------------------------
 * FUNCION :  BootProto_Task_1ms()
 * PURPOSE :  1) UpdateFlag 置位边沿 → 立即软强制兜底；持续封波由状态机接管
-*               （UpdateShutdownFlag 将 u16FlashUpdateFlag 纳入停机三触发，
+*               （SM_StopReq 将 u16FlashUpdateFlag 纳入停机四触发，
 *                停机转换 OstStop 锁存 + 非 RUN 态 ISR 每拍 Seal，对齐 v102 cPV_FlashStatus）
 *            2) FlashReady 持续 2s 确认（对齐 v102：200×10ms）→ 封波兜底 → 0x55AA + MOV SP,#0 + LB 0x080000 跳 Boot
 *------------------------------------------------------------------------------*/

@@ -75,6 +75,39 @@ static inline void SM_EnterState(SmState_e eNext)
     RunState.softStartTick = 0U;   /* 本态连续 50s 口径：进态清零 */
 }
 
+/* 调用方先关中断并传入原中断状态，功率 GPIO 在恢复中断后关断。 */
+static void SM_ForceInit(uint16_t intm)
+{
+    const Uint16 leavingInit = (RunState.state != SM_STATE_INIT);
+
+    if (leavingInit != 0U)
+    {
+        DAB_PWM_OstStop();
+    }
+    RunState.softStartArmed = 0U;
+    SM_EnterState(SM_STATE_INIT);
+    __restore_interrupts(intm);
+
+    if (leavingInit != 0U)
+    {
+        AppGpio_PowerSafeOff();
+    }
+}
+
+/**
+ * @brief  统一停机请求：故障 | 上位机故障命令 | 协议关机 | 升级中
+ * @return 1=应停机/禁止起机与出 STANDBY；0=允许运行
+ * @note   STANDBY 出态复查、UpdateShutdownFlag、Handle_Init 起机放行三处共用，
+ *         避免漏抄升级标志导致换向窗口短暂重发波。
+ */
+static inline Uint16 SM_StopReq(void)
+{
+    return (Uint16)(FAULT_ANY() ||
+                    (CfgParam.SysCmd.bit.faultcmd != 0U) ||
+                    (SysCmd.bit.shutdown == 0U) ||
+                    (stBootProto.u16FlashUpdateFlag != 0U));
+}
+
 /**
  * @brief  清空换向防抖票箱(电压票 + 电流给定票)
  *
@@ -173,8 +206,8 @@ static void SM_EnterStandby(Uint16 u16Target, Uint16 u16DwellN)
  *   ① f32Vbus: 双路母线陷波均值, 斜坡/外环播种初值;
  *   ② 关中断窗(顺序不可调换):
  *      a. SetMode / Ctrl_SetMode / Dab_Ctrl_SessionReset / RampInit*: 装载波、环参与会话状态;
- *      b. Fault_PreStartHwOk(): **清 OST 直前**复核 CMPSS。失败 → OstStop + INIT,
- *         本窗不解 OST —— 关掉「复核通过→装载中短过流→TZCLR 把新跳闸一并清掉」窗口;
+ *      b. Fault_PreStartHwOk(): 清 OST 前复核 CMPSS。失败时封波并回 INIT，
+ *         恢复中断后立即关闭功率 IO。清 OST 后再复核一次;
  *      c. DAB_PWM_Start(): 仅复核通过才 TZCLR.OST;
  *      d. Enter(RAMP_CLOSE): 最后公布状态;
  *   ③ restore 中断。
@@ -206,7 +239,7 @@ static void SM_StartClosedLoop(Uint16 u16Mode, Uint16 u16IsSwitch)
         Ctrl_RampInitCold(f32Vbus);
     }
 
-    /* 装载后核 → Start → 清后再核（挡 TZCLR 窄缝）；失败共用 OstStop→INIT */
+    /* 装载后核 → Start → 清后再核（挡 TZCLR 窄缝）；失败当拍封波并关功率 IO */
     u16HwOk = Fault_PreStartHwOk();
     if (u16HwOk != 0U)
     {
@@ -215,9 +248,7 @@ static void SM_StartClosedLoop(Uint16 u16Mode, Uint16 u16IsSwitch)
     }
     if (u16HwOk == 0U)
     {
-        DAB_PWM_OstStop();
-        SM_EnterState(SM_STATE_INIT);
-        __restore_interrupts(intm);
+        SM_ForceInit(intm);
         return;
     }
     SM_EnterState(SM_STATE_RAMP_CLOSE);
@@ -247,84 +278,35 @@ static void SM_StartClosedLoop(Uint16 u16Mode, Uint16 u16IsSwitch)
  */
 static void SM_ModeArbitrate_100us(void)
 {
-    float f32Vbus;
-    float f32Iact;
-    float f32Iref;
-    Uint16 u16WantRev;
+    const Uint16 charging = (RunState.workMode == (Uint16)WORK_MODE_CHARGE);
+    const float vbus = stADC.VmBusVolt.f32Notch;
+    const float iAct = stADC.BusCurr1.f32IsrResult + stADC.BusCurr2.f32IsrResult;
+    float iRef;
 
-    /* ---------- ① 电压通道: 只看"相对当前方向的反向条件" ---------- */
-    f32Vbus = stADC.VmBusVolt.f32Notch;    /* 电压环同一个值: 继电器 VM 侧陷波 */
-    f32Iact = stADC.BusCurr1.f32IsrResult + stADC.BusCurr2.f32IsrResult;  /* 两路母线电流和 */
-    u16WantRev = 0U;
-
-    if (RunState.workMode == (Uint16)WORK_MODE_CHARGE)
+    if (charging ? ((vbus < (RampTarget.v - SM_V_MODE_BAND)) && (iAct > -SM_EPS_CURR))
+                 : ((vbus > (RampTarget.v + SM_V_MODE_BAND)) && (iAct < SM_EPS_CURR)))
     {
-        if ((f32Vbus < (RampTarget.v - SM_V_MODE_BAND)) &&
-            (f32Iact > -SM_EPS_CURR) &&
-            ((RunState.curLowSealing & SM_SEAL_NO_DISCHARGE) == 0U))
-        {
-            u16WantRev = 1U;
-        }
-    }
-    else if (RunState.workMode == (Uint16)WORK_MODE_DISCHARGE)
-    {
-        if ((f32Vbus > (RampTarget.v + SM_V_MODE_BAND)) &&
-            (f32Iact < SM_EPS_CURR) &&
-            ((RunState.curLowSealing & SM_SEAL_NO_CHARGE) == 0U))
-        {
-            u16WantRev = 1U;
-        }
-    }
-
-    if (u16WantRev != 0U)
-    {
-        if (RunState.voltDebounce < SM_N_VOLT_DEBOUNCE)   /* 未满计则+1, 满计封顶 */
+        if (RunState.voltDebounce < SM_N_VOLT_DEBOUNCE)
         {
             RunState.voltDebounce++;
         }
     }
     else
     {
-        RunState.voltDebounce = 0U;                       /* 条件断即清零(抗毛刺) */
+        RunState.voltDebounce = 0U;
     }
 
-    /* ---------- ② 电流给定通道：仅 RUN；同样只计「要反向」 ---------- */
-    if (RunState.state != SM_STATE_RUN)
+    iRef = Bus.f32Ref;
+    if (charging ? (iRef > SM_EPS_CURR) : (iRef < -SM_EPS_CURR))
     {
-        RunState.irefDebounce = 0U;   /* 非 RUN(CLOSE 软起中)电流票无效并清零 */
-        return;
-    }
-
-    f32Iref = Bus.f32Ref;             /* 外环输出=整机电流给定(带符号) */
-    u16WantRev = 0U;
-
-    if (RunState.workMode == (Uint16)WORK_MODE_CHARGE)
-    {
-        if ((f32Iref > SM_EPS_CURR) &&
-            ((RunState.curLowSealing & SM_SEAL_NO_DISCHARGE) == 0U))
-        {
-            u16WantRev = 1U;
-        }
-    }
-    else if (RunState.workMode == (Uint16)WORK_MODE_DISCHARGE)
-    {
-        if ((f32Iref < -SM_EPS_CURR) &&
-            ((RunState.curLowSealing & SM_SEAL_NO_CHARGE) == 0U))
-        {
-            u16WantRev = 1U;
-        }
-    }
-
-    if (u16WantRev != 0U)
-    {
-        if (RunState.irefDebounce < SM_N_IREF_DEBOUNCE)   /* 未满计则+1, 满计封顶 */
+        if (RunState.irefDebounce < SM_N_IREF_DEBOUNCE)
         {
             RunState.irefDebounce++;
         }
     }
     else
     {
-        RunState.irefDebounce = 0U;                       /* 条件断即清零(抗毛刺) */
+        RunState.irefDebounce = 0U;
     }
 }
 
@@ -337,10 +319,11 @@ static void SM_ModeArbitrate_100us(void)
  *
  * 【流程】
  *   A 出态路径: ++stateTick 计驻留(进态已清零) → 未满 standbyDwellN 直接返回 →
- *     故障/关机复查(命中则不出态, 保持封波等 2ms 裁决收敛回 INIT) →
+ *     SM_StopReq 复查(命中则不出态, 保持封波等 2ms 裁决收敛回 INIT) →
  *     到期重读强制方向(待机期间用户改向立即生效; 无外部指令沿用入态目标) →
- *     SM_StartClosedLoop(mode, isSwitch=1) 换向播种路径回 RAMP_CLOSE。
- *   B 入口判定: 非 CLOSE/RUN → 清票箱返回(其他阶段无换向概念) →
+ *     消费 canCmd → SM_StartClosedLoop(mode, isSwitch=1) 换向播种路径回 RAMP_CLOSE。
+ *   B 入口判定: SM_StopReq → 清票返回(停机空窗内禁止再进 STANDBY) →
+ *     非 CLOSE/RUN → 清票箱返回(其他阶段无换向概念) →
  *     ① 强制/CAN 指令存在: dwell=5(500µs 裕量), 直接以指令方向为目标;
  *     ② 无外部指令: RAMP_CLOSE 直接清票返回(软起期抑制自动换向);
  *        RUN 取反向目标，计票前查一次禁向；被禁则清票返回。
@@ -368,10 +351,9 @@ void SM_Standby_100us(void)
         {
             return;
         }
-        /* 出态前复查故障/关机: 驻留期间新置故障或协议关机时不得解 OST 重新发波,
+        /* 出态前复查停机四条件(含升级): 驻留期间新置请求时不得重装载发波,
          * 保持 STANDBY 封波, 由 2ms UpdateShutdownFlag 收敛回 INIT。 */
-        if (FAULT_ANY() || CfgParam.SysCmd.bit.faultcmd ||
-            (SysCmd.bit.shutdown == 0U))
+        if (SM_StopReq() != 0U)
         {
             return;
         }
@@ -381,11 +363,19 @@ void SM_Standby_100us(void)
         {
             RunState.workMode = u16Next;
         }
+        RunState.canCmd = CAN_CMD_NONE;             /* 出态消费, 防 force 掩盖期间残留 */
         SM_StartClosedLoop(RunState.workMode, 1U);  /* 换向播种路径回 RAMP_CLOSE */
         return;
     }
 
     /* ================= B. 换向入口判定 ================= */
+    /* 停机空窗(1ms 已置停机 → 下拍 2ms 裁决前): 禁止再进 STANDBY 改写 workMode */
+    if (SM_StopReq() != 0U)
+    {
+        SM_ClearModeDebounce();
+        return;
+    }
+
     if ((RunState.state != SM_STATE_RAMP_CLOSE) && (RunState.state != SM_STATE_RUN))
     {
         SM_ClearModeDebounce();   /* INIT/RELAY/GPIO/PRECHECK: 无换向概念, 清票防残留 */
@@ -459,11 +449,12 @@ void SM_Standby_100us(void)
  *
  * 【流程】
  *   ① SM_SyncSysCmd(): 先刷新命令镜像, 本拍后续判断全部基于最新指令;
- *   ② 停机三触发(任一成立即整备停机):
+ *   ② 停机四触发 SM_StopReq()(任一成立即整备停机):
  *      a. FAULT_ANY()  —— 任意快/慢/alm 故障字非零;
  *      b. faultcmd     —— 上位机请求进故障停机: 清故障动作仅允许在 INIT
  *                         (Fault_ClearCmd5ms 自读 CfgParam 判门槛), 故先回 INIT;
  *      c. shutdown==0  —— 协议层要求关机(onoffcmd=0 或 openTest=1);
+ *      d. FlashUpdate  —— 升级中保持停机(与 STANDBY 出态/INIT 起机同源);
  *   ③ 故障快照: fast/slow/alm 各自仅在非零时写入 SaveAlarm —— 持续快照"最后
  *      一次非零故障", 不会被后续零值覆盖, 供上位机事后追溯停机原因;
  *   ④ DAB_PWM_OstStop(): OST 硬件锁存封波(仅 state!=INIT 时执行, 防重复写);
@@ -480,8 +471,7 @@ static void UpdateShutdownFlag(void)
 {
     SM_SyncSysCmd();                                        /* ① 刷新命令镜像 */
 
-    if (FAULT_ANY() || CfgParam.SysCmd.bit.faultcmd ||      /* ② 停机三触发 */
-        (SysCmd.bit.shutdown == 0U)||stBootProto.u16FlashUpdateFlag)
+    if (SM_StopReq() != 0U)                                 /* ② 停机四触发 */
     {
         if (stFault.fast != 0U)                             /* ③ 故障快照(仅非零写) */
         {
@@ -496,12 +486,7 @@ static void UpdateShutdownFlag(void)
             g_CanMon.SaveAlarm.savealarm = stFault.alm;
         }
 
-        if (RunState.state != SM_STATE_INIT)                /* ④ 非 INIT 才补 OST 封波 */
-        {
-            DAB_PWM_OstStop();
-        }
-        RunState.softStartArmed = 0U;
-        SM_EnterState(SM_STATE_INIT);                       /* Enter 已清 softStartTick */
+        SM_ForceInit(__disable_interrupts());              /* ④ 回 INIT 并当拍关断 */
     }
 
     if (SysCmd.bit.shutdown == 0U)                          /* ⑥ 主动关机: 过程性故障复位 */
@@ -523,10 +508,10 @@ static void UpdateShutdownFlag(void)
  *      (当前调度链路未接入, 此处仅固定角色语义);
  *   ② 每拍复位安全面: 清 CAN 指令 / DAB_PWM_Stop 软强制兜底 / PowerSafeOff
  *      全部功率 IO 进安全态 —— INIT 停留多久, 安全面就保持多久;
- *   ③ 起机放行四条件(同时成立): 无故障 + 无清故障请求 + shutdown==1(协议要求运行)
- *      + 非升级中(u16FlashUpdateFlag==0)。升级标志已在 UpdateShutdownFlag 拉回 INIT,
- *      若起机侧不联锁, 同拍仍会因开机请求吸合继电器并进 RELAY, 下一拍再被拉回,
- *      形成每 2ms「SafeOff→再吸合」命令抖动; 故起机门槛必须对称禁止。
+ *   ③ 起机放行: !SM_StopReq()（与停机裁决/STANDBY 出态同源四条件）。
+ *      升级标志已在 UpdateShutdownFlag 拉回 INIT；若起机侧不联锁, 同拍仍会因
+ *      开机请求吸合继电器并进 RELAY, 下一拍再被拉回, 形成每 2ms
+ *      「SafeOff→再吸合」命令抖动; 故起机门槛必须对称禁止。
  *   ④ 放行后一次性动作: Ctrl_Init 控制模块冷复位 → relayStable/票箱/禁向位
  *      清零 → 吸合软起继电器与主继电器 → 进 RELAY 等待压差收敛。
  *
@@ -545,9 +530,7 @@ static void Handle_Init(void)
     DAB_PWM_Stop();                              /*    软强制兜底(与 OST 双保险) */
     AppGpio_PowerSafeOff();                      /*    全部功率 IO 安全态 */
 
-    if ((FAULT_ANY() == 0U) && (CfgParam.SysCmd.bit.faultcmd == 0U) &&   /* ③ 放行四条件 */
-        (SysCmd.bit.shutdown != 0U) &&
-        (stBootProto.u16FlashUpdateFlag == 0U))  /*    升级中保持安全停机, 取消后才允许起机 */
+    if (SM_StopReq() == 0U)                      /* ③ 放行：停机四条件皆未置 */
     {
         Ctrl_Init();                             /* ④ 控制模块冷复位(斜坡/补偿/环路态) */
 
@@ -569,8 +552,9 @@ static void Handle_Init(void)
  *      窗未满直接返回 —— 40ms 滑窗给电压采样/陷波足够的建立时间;
  *   ② 窗满(第 20 拍)判向, 三级优先:
  *      a. 强制/CAN 外部指令(SM_ResolveForcedMode): 人/上位机意图最高优先;
- *      b. 禁向评估: 充/放电电流设定 ≤0.5A 判该方向禁用 —— 单边禁用直接定
- *         另一向(双禁/双可用落入 c 项电压多数票);
+ *      b. 禁向评估: Ctrl_CalcGiven()（与冷启/1ms sLimitSealSynth 同源）——
+ *         含设定 ≤0.5A 与充电功率降额/电池电压限幅; 单边禁用直接定另一向
+ *         (双禁/双可用落入 c 项电压多数票);
  *      c. 电压多数票: 窗内 ≥15/20 拍欠压 → 放电(母线缺电需电池顶上), 否则充电;
  *   ③ 提交: 写 workMode / 清 CAN 指令 / 清票数 → SM_StartClosedLoop(mode, 0)
  *      冷启播种路径 → RAMP_CLOSE。
@@ -590,8 +574,11 @@ static void Handle_Init(void)
 static void Handle_Precheck(void)
 {
     Uint16 workMode = WORK_MODE_DISCHARGE;               /* 判向结果(初值仅为消警告, ②必覆盖) */
+    Uint16 u16Seal;
     float vBus = stADC.VmBusVolt.f32Notch;               /* 继电器 VM 陷波值(与电压环同源) */
     float f32Vset = (float)CfgParam.BusVolSet * 0.1f;    /* 设定电压(0.1V 定标→V) */
+    float f32Dis;
+    float f32Chg;
 
     /* 窗内统计: 母线 < 设定值即计放电票(无死区带, 见重难点·判向基准) */
     if (vBus < (f32Vset))
@@ -605,10 +592,11 @@ static void Handle_Precheck(void)
     }
 
     workMode = SM_ResolveForcedMode((Uint16)SysCmd.bit.forceMode);  /* ②a 外部指令优先 */
-    if (workMode == (Uint16)WORK_MODE_STANDBY)                      /* 无外部指令 */
+    u16Seal = Ctrl_CalcGiven(&f32Dis, &f32Chg);          /* ②b 有效给定+禁向：判向拍唯一一次全量计算 */
+    if (workMode == (Uint16)WORK_MODE_STANDBY)           /* 无外部指令 → 禁向/多数票判向 */
     {
-        Uint16 u16NoDis = (((float)CfgParam.BusDischgCurSet * 0.1f) <= SM_IBUS_DISCHAR_STANDBY_MIN) ? 1U : 0U;
-        Uint16 u16NoChg = (((float)CfgParam.BusChgCurSet * 0.1f) <= SM_IBUS_CHAR_STANDBY_MIN) ? 1U : 0U;
+        Uint16 u16NoDis = (Uint16)((u16Seal & SM_SEAL_NO_DISCHARGE) != 0U);
+        Uint16 u16NoChg = (Uint16)((u16Seal & SM_SEAL_NO_CHARGE) != 0U);
 
         if ((u16NoDis != 0U) && (u16NoChg == 0U))        /* ②b 仅放电被禁 → 充电 */
         {
@@ -627,6 +615,10 @@ static void Handle_Precheck(void)
     }
 
     RunState.workMode = workMode;                        /* ③ 判向结果落位 */
+    /* 有效给定落位：冷启装载(sRampInitCommon)直接复用，不再重算 */
+    RunState.f32ColdDis = f32Dis;
+    RunState.f32ColdChg = f32Chg;
+    RunState.curLowSealing = u16Seal;
     RunState.canCmd = CAN_CMD_NONE;                      /*    CAN 指令已消费 */
     RunState.precheckLowCnt = 0U;                        /*    票数清零(下一趟从零起) */
 
@@ -638,7 +630,7 @@ static void Handle_Precheck(void)
  * @brief  [状态2] RELAY: 继电器吸合确认 —— 高低压侧压差收敛判定
  *
  * 【流程】每拍两条并行时间线:
- *   超时线: ++stateTick ≥750 拍(1500ms)仍未收敛 → Fault_SetRelay(slow 故障);
+ *   超时线: ++stateTick ≥750 拍(1500ms)仍未收敛 → 记继电器故障并当拍关断;
  *   收敛线: vDiff=|VM 陷波 − PCS 100ms 滤波| 压差 → ≥30V 视为未吸合/弹跳, relayStable
  *   清零重计 → 连续 250 拍(500ms) <30V → 判定吸合完毕 → GPIO。
  *
@@ -655,7 +647,8 @@ static void Handle_Relay(void)
 
     if (++RunState.stateTick >= SM_T_RELAY_TIMEOUT)   /* 超时线: 1500ms 未收敛 */
     {
-        Fault_SetRelay();                             /* → slow.relay 故障停机 */
+        Fault_SetRelay();
+        SM_ForceInit(__disable_interrupts());
         return;
     }
 
@@ -705,27 +698,28 @@ static void Handle_Gpio(void)
  * @brief  [状态5] RAMP_CLOSE: 斜坡到位判定(闭环本体在 1ms/ISR)
  *
  * 【流程】
- *   ① workMode 合法性防御: 非充非放则本拍不判完成;
- *   ② 最短驻留 10ms(stateTick，进态清零): 防零拍直穿 RUN;
+ *   ① 最短驻留计时：进入本态后，前 5 次调用只计拍，第 6 次才检查完成条件;
+ *   ② workMode 合法性防御: 非充非放则本拍不判完成;
  *   ③ Ctrl_RampDone() → RUN。
  * 软起：本态连续 50s（tick 进态清）；进 RUN 当场清 softStartArmed。
  *
- * 【重难点·计时归属】本态 stateTick 由 SM_Step_2ms 尾部自增，仅服务最短驻留。
+ * 【重难点·计时归属】stateTick 在本函数内计拍，到门槛封顶。
  */
 static void Handle_RampClose(void)
 {
     Uint16 workMode;
+
+    if (RunState.stateTick < SM_T_RAMP_CLOSE_MIN)
+    {
+        RunState.stateTick++;
+        return;
+    }
 
     workMode = RunState.workMode;
     if ((workMode != (Uint16)WORK_MODE_CHARGE) &&
         (workMode != (Uint16)WORK_MODE_DISCHARGE))
     {
         return;                                   /* 工况非法: 不判完成(防御分支) */
-    }
-
-    if (RunState.stateTick < SM_T_RAMP_CLOSE_MIN)  /* ② 最短驻留 10ms 未满 */
-    {
-        return;
     }
 
     if (Ctrl_RampDone() == 0U)                     /* ③ 斜坡未到位(电压/限值任一差) */
@@ -765,12 +759,10 @@ void SM_Init(void)
  *   ② switch 分发: 各态句柄见上方逐一注释;
  *      - STANDBY/RUN 无 2ms 句柄: STANDBY 驻留/出态在 100µs 任务; RUN 稳态
  *        全部闭环动作在 ISR, 状态机无事可做;
- *      - default: OstStop + 回 INIT —— 任何跑飞的状态值(位翻转等)无条件收敛
- *        到硬件封波停机(fail-safe 设计);
+ *      - default: 状态值异常时当拍封波、回 INIT 并关闭功率 IO;
  *   ③ staFlag 位图发布: 每拍按当前态重建(1U<<state), 上位机观测专用;
- *   ④ RAMP_CLOSE 最短驻留: 尾部 stateTick++（进态清零，与软起超时无关）;
- *   ⑤ openTestTime: 开环测试或 RUN 发波时长观测。
- * 软起超时在 SM_SoftStartTick5ms（Task_5ms，Fault_Detect5ms 之后），不在此调用。
+ *   ④ openTestTime: 开环测试或 RUN 发波时长观测。
+ * 软起超时由 Task_5ms 调用 SM_SoftStartTick5ms 处理，排在 Fault_Detect5ms 之前。
  *
  * 【重难点·执行顺序】①与②的先后不可调换: 若先分发后裁决, 故障拍内旧态句柄
  * 仍会执行一次(如 RAMP_CLOSE 判完成进 RUN), 虽然下一拍会被裁决拉回, 但多出
@@ -790,29 +782,22 @@ void SM_Step_2ms(void)
         case SM_STATE_RAMP_CLOSE:   Handle_RampClose();  break;
         case SM_STATE_RUN:          break;
         default:
-            DAB_PWM_OstStop();
-            RunState.softStartArmed = 0U;
-            SM_EnterState(SM_STATE_INIT);
+            SM_ForceInit(__disable_interrupts());
             break;
     }
 
     RunState.staFlag.all = (Uint16)(1U << (Uint16)RunState.state);   /* ③ 观测位图 */
 
-    if (RunState.state == SM_STATE_RAMP_CLOSE)     /* ④ 最短驻留计时 */
-    {
-        RunState.stateTick++;
-    }
-
     if ((CfgParam.SysCmd.bit.openTest != 0U) || (RunState.state == SM_STATE_RUN))
     {
-        RunState.openTestTime++;                   /* ⑤ 发波时长观测计数 */
+        RunState.openTestTime++;                   /* ④ 发波时长观测计数 */
     }
 }
 
 /**
  * @brief  5ms 软起超时：计时归属本模块；满门限只调 Fault_SetSoftTo 置位
- * @note   tick 随 EnterState 清零；armed 由进 RUN 当场清；须在 Fault_Detect5ms
- *         之后调用（开路测试门控已清 softTo 后本拍可再置，行为与原内嵌一致）
+ * @note   进入各状态时清计时，进入 RUN 时解除超时监控。
+ *         本函数先于 Fault_Detect5ms 执行。Fault_SetSoftTo 在开环测试时禁止置位。
  */
 void SM_SoftStartTick5ms(void)
 {

@@ -17,6 +17,7 @@
  *   Ctrl_RampDone       电压和两向电流限值是否都到位
  *   Ctrl_RampInitCold   冷启：清 Bus + 装 Ramp（放电10A / 充电−2A）
  *   Ctrl_RampInitSwitch 换向：清 Bus + 装 Ramp（放电满设定 / 充电压差增益）
+ *   Ctrl_CalcGiven      有效给定+禁向位图（与冷启/1ms 同一口径，供 PRECHECK 判向拍）
  *
  * 环路计算在 Interrupt_CtrlDab.c。双桥 PWM 均启用。
  * 使用本头的 .c 须先包含 Includes.h。
@@ -134,5 +135,6 @@ Uint16 Ctrl_RampDone(void);                            /* 1：电压和两向限
 
 void Ctrl_RampInitCold(float f32VoltFbk);              /* 冷启斜坡初值 */
 void Ctrl_RampInitSwitch(float f32VoltFbk);            /* 换向/出待机斜坡初值 */
+Uint16 Ctrl_CalcGiven(float *pf32Dis, float *pf32Chg); /* 有效给定+禁向：判向拍一次算出，冷启装载复用 */
 
 #endif /* APP_CTRL_DATA_H */
