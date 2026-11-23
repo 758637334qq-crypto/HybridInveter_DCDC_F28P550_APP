@@ -8,19 +8,20 @@
 
 /**
  * @brief  5ms 任务体
- * @note   顺序：陷波 → 串口 → 软起计时(SM) → 慢保护 → 遥测 → CAN 内务
+ * @note   顺序：陷波 → 软起计时(SM) → 慢保护 → 遥测汇总 → 串口遥测 → CAN 内务
  */
 void Task5ms(void)
 {
     /* 陷波参数：按 g_Notch2f.f32LineHz / f32K 双缓冲发布 */
     Notch2f_ParamUpdate5ms();
 
-    /* 串口协议先跑：刷新 LastRx/LastValid，供本拍 Fault_Detect5ms 判定 SCI */
-    UartProto_Task_5ms();
-
     SM_SoftStartTick5ms(); /* 软起计时在 SM；满则 Fault_SetSoftTo（排在 Fault_Detect5ms 之前，受开路测试门控统一约束） */
     Fault_Detect5ms();
     Update_CanMon();
+
+    /* 串口遥测：排在 Update_CanMon 之后，本拍即发送最新遥测/故障快照（RX 已在 Task_1ms 处理） */
+    UartProto_Task_5ms();
+
     CanComm_Task_5ms(); /* Bus-Off + 地址计时 */
 }
 

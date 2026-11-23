@@ -16,7 +16,8 @@ void CustomUart_Init(void)
 
     memset(&stCustomUart, 0, sizeof(stCustomUart));
 
-    baudDiv = (uint16_t)((DEVICE_LSPCLK_FREQ / (115200UL * 8UL)) - 1UL);   /* BRR = LSPCLK / (115200 × 8) − 1 */
+    /* BRR 四舍五入：(LSPCLK + baud×4) / (baud×8) − 1；37.5MHz/115200 → 40（-0.76%，原截断 39 为 +1.73%） */
+    baudDiv = (uint16_t)(((DEVICE_LSPCLK_FREQ + (115200UL * 4UL)) / (115200UL * 8UL)) - 1UL);
 
     ScibRegs.SCICTL1.bit.SWRESET = 0;   /* 配置期间保持复位，避免误收发 */
 
@@ -91,38 +92,35 @@ bool CustomUart_Write(const uint16_t *data, uint16_t len)
 /* 1ms 拍首调（UartProto_RxTask 内）：RX 硬件溢出/错误标志检查与恢复。
  * 出错按设计丢弃整段 FIFO（含错误字节前已收到的字节），交由上位机超时重发。
  * 返回 true = 本拍发生过错误恢复，调用方应立即作废正在接收中的半帧。
- * 注意：SWRESET 会同时复位 SCI 发送状态机，正在移位输出的字节可能被中止
- * （对端看到被撕坏的帧，靠 CRC 兜底重发） */
+ * 仅 SCIRXST.RXERROR 置位时才做 SWRESET（仅 RXFFOVF 溢出时只复位 RX FIFO，避免无谓撕裂 TX）；
+ * 溢出标志清零放在 SCI_resetRxFIFO 之后，消除清标志到复位间的竞态窗口。 */
 bool CustomUart_RxService(void)
 {
-    uint16_t rxStatus;
-    bool needRecover;
+    bool hasOvf;
+    bool hasErr;
 
     /* 硬件溢出/错误标志不清会粘住，本拍先清干净 */
-    needRecover = false;
-    if (SCI_getOverflowStatus(UART_HW_BASE) != false)
+    hasOvf = SCI_getOverflowStatus(UART_HW_BASE);
+    if (hasOvf != false)
     {
         stCustomUart.u16RxHwOvfCnt++;
-        needRecover = true;
-    }
-    rxStatus = SCI_getRxStatus(UART_HW_BASE);
-    if ((rxStatus & SCI_RXSTATUS_ERROR) != 0U)
-    {
-        stCustomUart.u16RxHwErrCnt++;
-        needRecover = true;
-    }
-    if (needRecover != false)
-    {
-        while (SCI_getRxFIFOStatus(UART_HW_BASE) != SCI_FIFO_RX0)
-        {
-            (void)SCI_readCharNonBlocking(UART_HW_BASE);
-        }
-        SCI_clearOverflowStatus(UART_HW_BASE);
-        SCI_performSoftwareReset(UART_HW_BASE);
-        SCI_resetRxFIFO(UART_HW_BASE);
     }
 
-    return needRecover;
+    hasErr = ((SCI_getRxStatus(UART_HW_BASE) & SCI_RXSTATUS_ERROR) != 0U);
+    if (hasErr != false)
+    {
+        stCustomUart.u16RxHwErrCnt++;
+        SCI_performSoftwareReset(UART_HW_BASE);
+    }
+
+    if ((hasOvf != false) || (hasErr != false))
+    {
+        SCI_resetRxFIFO(UART_HW_BASE);
+        SCI_clearOverflowStatus(UART_HW_BASE);
+        return true;
+    }
+
+    return false;
 }
 
 /* 从硬件 RX FIFO 取一个字节；false = FIFO 空（调用方 1ms 拍内循环直至空）。

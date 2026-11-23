@@ -40,6 +40,17 @@ void BootProto_Init(void)
 }
 
 /*------------------------------------------------------------------------------
+* FUNCION :  BootProto_ResetRx()
+* PURPOSE :  作废在收半帧，回到等帧头（RX 硬件错误恢复 / 静默断帧共用）
+*------------------------------------------------------------------------------*/
+void BootProto_ResetRx(void)
+{
+    stBootProto.u16State      = BOOT_ST_WAIT_ADDR;
+    stBootProto.u16ByteIdx    = 0U;
+    stBootProto.u16SilenceCnt = 0U;
+}
+
+/*------------------------------------------------------------------------------
 * FUNCION :  BootProto_Task_Rx()
 * PURPOSE :  字节间隔计时（1ms 拍）：>4ms 无新字节 → 半帧作废，回到等帧头。
 *            必须在 UartProto_RxTask 喂字节之前调用（Task_1ms 顺序保证），
@@ -47,13 +58,12 @@ void BootProto_Init(void)
 *------------------------------------------------------------------------------*/
 void BootProto_Task_Rx(void)
 {
-    stBootProto.u16SilenceCnt++;
-    if (stBootProto.u16SilenceCnt > BOOT_PROTO_SILENCE_TICKS)
+    if (stBootProto.u16State != BOOT_ST_WAIT_ADDR)
     {
-        if (stBootProto.u16State != BOOT_ST_WAIT_ADDR)
+        stBootProto.u16SilenceCnt++;
+        if (stBootProto.u16SilenceCnt > BOOT_PROTO_SILENCE_TICKS)
         {
-            stBootProto.u16State  = BOOT_ST_WAIT_ADDR;
-            stBootProto.u16ByteIdx = 0U;
+            BootProto_ResetRx();
         }
     }
 }
@@ -122,7 +132,10 @@ void BootProto_RxByte(uint16_t byte)
 
                     if (cmd == stBootProto.u16LastCmd)
                     {
-                        stBootProto.u16CmdRepeat++;
+                        if (stBootProto.u16CmdRepeat < 2U)
+                        {
+                            stBootProto.u16CmdRepeat++;   /* 饱和到 2，防止连续 65536 帧后 16 位回卷 */
+                        }
                     }
                     else
                     {
@@ -167,11 +180,19 @@ void BootProto_RxByte(uint16_t byte)
 void BootProto_Task_1ms(void)
 {
     /* 进入升级态边沿：仅作立即生效的软强制（AQCSFRC 可被判向/故障翻转清除，
-     * 不承担持续封波；持续封波依赖状态机停机路径的 OST 锁存与每拍 Seal） */
-    if ((stBootProto.u16FlashUpdateFlag != 0U) && (stBootProto.u16PwmDisabled == 0U))
+     * 不承担持续封波；持续封波依赖状态机停机路径的 OST 锁存与每拍 Seal）；
+     * 升级态撤销后清 u16PwmDisabled，确保再次进升级态仍能 1ms 立即封波。 */
+    if (stBootProto.u16FlashUpdateFlag != 0U)
     {
-        DAB_PWM_Stop();
-        stBootProto.u16PwmDisabled = 1U;
+        if (stBootProto.u16PwmDisabled == 0U)
+        {
+            DAB_PWM_Stop();
+            stBootProto.u16PwmDisabled = 1U;
+        }
+    }
+    else
+    {
+        stBootProto.u16PwmDisabled = 0U;
     }
 
     if (stBootProto.u16FlashReady != 0U)
@@ -180,9 +201,11 @@ void BootProto_Task_1ms(void)
 
         if (stBootProto.u16ReadyCnt > BOOT_PROTO_READY_TICKS_1MS)
         {
-            DAB_PWM_Stop();     /* 跳转前兜底封波 */
-
             OS_ENTER_CRITICAL();
+
+            SysCtl_serviceWatchdog();
+            SysCtl_disableWatchdog();
+            Board_PrepareForBoot();         /* OST+软强制封波 / 安全关 IO / PWM 脚切输入（保留 SCIB） */
 
             FromAppRequestFlag = 0x55AA;    /* cmd 符号 0x128：Boot 判定来自 App 的升级请求 */
 

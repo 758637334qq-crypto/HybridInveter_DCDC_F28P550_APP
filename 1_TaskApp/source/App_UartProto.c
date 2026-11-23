@@ -364,7 +364,6 @@ static void sRxByte(uint16_t byte)
     {
         if (b == PROTOCOL_SOF1)
         {
-            stUartProto.u16RxFrameBuf[0] = b;
             pos = 1U;
         }
         else if (b != PROTOCOL_SOF2)
@@ -376,7 +375,15 @@ static void sRxByte(uint16_t byte)
     {
         if (b != PROTOCOL_BMS_PAYLOAD_LEN)
         {
-            pos = 0U;
+            if (b == PROTOCOL_SOF1)
+            {
+                stUartProto.u16RxFrameBuf[0] = PROTOCOL_SOF1;
+                pos = 1U;
+            }
+            else
+            {
+                pos = 0U;
+            }
         }
     }
     else if (pos >= PROTOCOL_RX_FRAME_SIZE)   /* 16 字收齐：校验 + 当拍执行 */
@@ -450,6 +457,7 @@ void UartProto_RxTask(void)
     if (CustomUart_RxService())
     {
         stUartProto.u16RxFramePos = 0U;
+        BootProto_ResetRx();
     }
 
     /* 硬件 FIFO 逐字节直递：16 字节约 1.39ms 填满，1ms 轮询余量 0.39ms（Task1ms 最坏抖动需实测） */

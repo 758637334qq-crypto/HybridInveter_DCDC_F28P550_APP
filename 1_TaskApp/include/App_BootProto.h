@@ -59,6 +59,7 @@ extern ST_BOOT_PROTO_CTRL stBootProto;
 /* ==================== 4. 公共 API ==================== */
 
 void BootProto_Init(void);          /* 清状态机/标志（main 调一次） */
+void BootProto_ResetRx(void);       /* 复位收帧状态机（RX 硬件错误恢复/断帧超时时作废在收半帧） */
 void BootProto_Task_Rx(void);       /* 静默断帧检查（1ms；必须排在 UartProto_RxTask 喂字节之前） */
 void BootProto_RxByte(uint16_t byte);   /* 升级协议字节入口：0xD2 → 0x01 → 定长 96 收集 → 解析帧[9] */
 void BootProto_Task_1ms(void);      /* 升级态边沿封波 + FlashReady 2s 确认 → 跳 Boot */
