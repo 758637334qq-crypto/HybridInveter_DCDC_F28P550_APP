@@ -45,6 +45,4 @@ void CustomUart_Task_1ms(void);   /* TX 环 → TX FIFO */
 
 bool CustomUart_Write(const uint16_t *data, uint16_t len);   /* 整包入 TX 环；false = 空间不足，一个字节都不写 */
 
-bool CustomUart_TxIdle(void);   /* TX 空闲：软件环已搬空且硬件 FIFO 已空 */
-
 #endif

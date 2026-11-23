@@ -17,7 +17,8 @@
  *   换向:  强制/CAN: RAMP_CLOSE/RUN 均可提交(驻留5拍)
  *          自动: 仅 RUN 计票(双票确认+驻留1拍), RAMP_CLOSE 抑制自动换向 --> STANDBY
  *          STANDBY(驻留到期, 以最新方向重装载) → RAMP_CLOSE → RUN
- *   停机:  任意态 --(故障 | 上位机清故障 | 协议关机)--> INIT (OstStop 硬件封波)
+ *   停机:  任意态 --(故障 | 上位机清故障 | 协议关机 | 升级中)--> INIT (OstStop 硬件封波)
+ *         升级中起机联锁见 Handle_Init：禁止吸合继电器，保持 PowerSafeOff
  *   注: 起机跳过 STANDBY (STANDBY 仅作换向中转), STANDBY 占用原 RAMP_OPEN=4 槽位。
  *
  * 【封波三层防线(软 → 硬, 与 Interrupt_CtrlDab.c 封波门对齐)】
@@ -522,7 +523,10 @@ static void UpdateShutdownFlag(void)
  *      (当前调度链路未接入, 此处仅固定角色语义);
  *   ② 每拍复位安全面: 清 CAN 指令 / DAB_PWM_Stop 软强制兜底 / PowerSafeOff
  *      全部功率 IO 进安全态 —— INIT 停留多久, 安全面就保持多久;
- *   ③ 起机放行三条件(同时成立): 无故障 + 无清故障请求 + shutdown==1(协议要求运行);
+ *   ③ 起机放行四条件(同时成立): 无故障 + 无清故障请求 + shutdown==1(协议要求运行)
+ *      + 非升级中(u16FlashUpdateFlag==0)。升级标志已在 UpdateShutdownFlag 拉回 INIT,
+ *      若起机侧不联锁, 同拍仍会因开机请求吸合继电器并进 RELAY, 下一拍再被拉回,
+ *      形成每 2ms「SafeOff→再吸合」命令抖动; 故起机门槛必须对称禁止。
  *   ④ 放行后一次性动作: Ctrl_Init 控制模块冷复位 → relayStable/票箱/禁向位
  *      清零 → 吸合软起继电器与主继电器 → 进 RELAY 等待压差收敛。
  *
@@ -541,8 +545,9 @@ static void Handle_Init(void)
     DAB_PWM_Stop();                              /*    软强制兜底(与 OST 双保险) */
     AppGpio_PowerSafeOff();                      /*    全部功率 IO 安全态 */
 
-    if ((FAULT_ANY() == 0U) && (CfgParam.SysCmd.bit.faultcmd == 0U) &&   /* ③ 放行三条件 */
-        (SysCmd.bit.shutdown != 0U))
+    if ((FAULT_ANY() == 0U) && (CfgParam.SysCmd.bit.faultcmd == 0U) &&   /* ③ 放行四条件 */
+        (SysCmd.bit.shutdown != 0U) &&
+        (stBootProto.u16FlashUpdateFlag == 0U))  /*    升级中保持安全停机, 取消后才允许起机 */
     {
         Ctrl_Init();                             /* ④ 控制模块冷复位(斜坡/补偿/环路态) */
 

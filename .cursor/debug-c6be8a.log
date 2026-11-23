@@ -1,0 +1,10 @@
+{"sessionId": "c6be8a", "runId": "pre-refactor", "hypothesisId": "A", "location": "main:entry", "message": "host helper test start", "data": {"suite": "fault_helpers"}, "timestamp": 1795399448052}
+{"sessionId": "c6be8a", "runId": "pre-refactor", "hypothesisId": "A", "location": "Level:trip", "message": "after 3 hits bit1 set", "data": {"word": 2, "trip": 3}, "timestamp": 1795399448052}
+{"sessionId": "c6be8a", "runId": "pre-refactor", "hypothesisId": "B", "location": "Level:rec", "message": "recover cleared bit after 2", "data": {"word": 0}, "timestamp": 1795399448052}
+{"sessionId": "c6be8a", "runId": "pre-refactor", "hypothesisId": "C", "location": "Level:equiv", "message": "simple Level matches original", "data": {"match": 1}, "timestamp": 1795399448053}
+{"sessionId": "c6be8a", "runId": "pre-refactor", "hypothesisId": "D", "location": "RetryLock", "message": "3rd rising sets alm", "data": {"alm": 1}, "timestamp": 1795399448053}
+{"sessionId": "c6be8a", "runId": "pre-refactor", "hypothesisId": "E", "location": "RecCnt", "message": "rec N then clear", "data": {"ok": 1}, "timestamp": 1795399448053}
+{"sessionId": "c6be8a", "runId": "pre-refactor", "hypothesisId": "G", "location": "ImbHit", "message": "imbalance formula checks", "data": {"done": 1}, "timestamp": 1795399448053}
+{"sessionId": "c6be8a", "runId": "pre-refactor", "hypothesisId": "H", "location": "SCI:trunc", "message": "Uint16 trunc can miss SCI fault if idle>65535", "data": {"idle32": 70000, "idle16": 4464, "thr": 10000, "miss_if_u16": 1}, "timestamp": 1795399448054}
+{"sessionId": "c6be8a", "runId": "pre-refactor", "hypothesisId": "H2", "location": "SCI:cap", "message": "production UART_PROTO_IDLE_CAP_MS=60000 keeps Uint16 safe today", "data": {"cap_ms": 60000, "fits_u16": 1}, "timestamp": 1795399448054}
+{"sessionId": "c6be8a", "runId": "pre-refactor", "hypothesisId": "Z", "location": "main:exit", "message": "host helper test done", "data": {"pass": 1}, "timestamp": 1795399448054}

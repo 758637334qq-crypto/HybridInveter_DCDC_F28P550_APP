@@ -163,13 +163,3 @@ void CustomUart_Task_1ms(void)
         stCustomUart.u16TxTail = tail;   /* 搬完一次性释放空间给 Write() */
     }
 }
-
-/* TX 空闲判定：软件环已搬空且硬件 FIFO 已空。
- * 用途：复位进 Boot 前确认 ACK（'Y'）已上线——提交点的 TX 完成侧判据。
- * 注意只能看到 FIFO 级，最后一个字节可能仍在移位寄存器（≤1 字节时间 ~87us），
- * 调用侧需留出该裕量 */
-bool CustomUart_TxIdle(void)
-{
-    return ((stCustomUart.u16TxHead == stCustomUart.u16TxTail) &&
-            (SCI_getTxFIFOStatus(UART_HW_BASE) == SCI_FIFO_TX0));
-}
