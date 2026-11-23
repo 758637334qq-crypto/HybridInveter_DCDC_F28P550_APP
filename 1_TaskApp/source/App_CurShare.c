@@ -139,9 +139,8 @@ uint16_t CurShare_Rx41(uint16_t u16Adr, const uint16_t *pu16Dat)
         return 0U;
     }
 
-    uMdlAddMes.uRecMdl_onoff[u16Adr]        = pu16Dat[1];
-    uMdlAddMes.uRecMdl_CursetCoff[u16Adr]   = (float)pu16Dat[2];
-    uMdlAddMes.uRecMdl_ReCursetCoff[u16Adr] = (float)pu16Dat[3];
+    uMdlAddMes.uRecMdl_onoff[u16Adr] = pu16Dat[1];
+    /* pu16Dat[2]/[3] 为历史系数槽，本机发送固定 1，接收侧不再存 */
 
     u16Raw = (uint16_t)(((uint16_t)pu16Dat[4] << 8) | (pu16Dat[5] & 0xFFU));
     uMdlAddMes.uRecMdl_Curset[u16Adr] = (float)u16Raw * 0.01f;
@@ -160,7 +159,6 @@ uint16_t CurShare_Rx41(uint16_t u16Adr, const uint16_t *pu16Dat)
  */
 void CurShare_Rx42(uint16_t u16Adr, const uint16_t *pu16Dat)
 {
-    uint16_t u16Raw;
     uint16_t u16ModeBits;
 
     if ((pu16Dat == 0) || (u16Adr > (uint16_t)recnum) || (u16Adr == uMdlAddMes.uIndex))
@@ -168,12 +166,7 @@ void CurShare_Rx42(uint16_t u16Adr, const uint16_t *pu16Dat)
         return;
     }
 
-    uMdlAddMes.ADDRID_Config[u16Adr]    = 1U;
-    uMdlAddMes.uRecMdl_RunState[u16Adr] = pu16Dat[1];
-
-    u16Raw = (uint16_t)(((uint16_t)pu16Dat[2] << 8) | (pu16Dat[3] & 0xFFU));
-    uMdlAddMes.uRecMdl_vbat[u16Adr] = (float)u16Raw * 0.01f;
-
+    /* 0x42 样本数组已从 MDADDRMES 删除；此处只解析主机跟机命令 */
     if (pu16Dat[4] == 0U)
     {
         return;
@@ -208,7 +201,7 @@ uint16_t CurShare_FillTx41(uint16_t *pu16Dat)
     float    f32Val;
 
     /* ★ 均流地址须与接收端的表下标范围一致。 */
-    if ((pu16Dat == 0) || (uMdlAddMes.uCanState.bits.bCalIDCmd != ADDRcmd_end) ||
+    if ((pu16Dat == 0) || (uMdlAddMes.bCalIDCmd != ADDRcmd_end) ||
         (uMdlAddMes.uIndex > (uint16_t)recnum))
     {
         return 0U;
@@ -242,7 +235,7 @@ uint16_t CurShare_FillTx42(uint16_t *pu16Dat)
 {
     uint16_t u16Raw;
 
-    if ((pu16Dat == 0) || (uMdlAddMes.uCanState.bits.bCalIDCmd != ADDRcmd_end))
+    if ((pu16Dat == 0) || (uMdlAddMes.bCalIDCmd != ADDRcmd_end))
     {
         return 0U;
     }
@@ -336,7 +329,7 @@ static void CurShare_AverCal(void)
 
     /* ★ 本机可运行时先计入本机，再发布有效均流台数。 */
     CurShare.workCount = 1U;
-    if ((uMdlAddMes.uCanState.bits.bCalIDCmd != ADDRcmd_end) ||
+    if ((uMdlAddMes.bCalIDCmd != ADDRcmd_end) ||
         (uMdlAddMes.uIndex > (uint16_t)recnum) ||
         (peerCount == 0U) || (iset <= 0.0f) || (lim <= 0.0f))
     {

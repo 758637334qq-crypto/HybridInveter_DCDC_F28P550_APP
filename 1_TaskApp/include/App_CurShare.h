@@ -3,8 +3,8 @@
  *
  * 职责边界：
  *   本模块：对端 0x41/0x42 解包、本机 0x41/0x42 组包、均流电流、下垂/trim → voltAdj。
- *   ConfigChip_McanInit ：只负责何时发、用哪条 ID/缓冲发、收到帧后回调本模块。
- *   App_UartProto：本机逻辑地址重赋值（写 uIndex + bRecAddr），地址变更时 ResetPeers。
+ *   App_CanComm：何时发、用哪条 ID/缓冲发；收到 0x41 后回调本模块。
+ *   App_UartProto：本机逻辑地址重赋值（写 uIndex + bCalIDCmd），地址变更时 ResetPeers。
  *
  * 协议对齐 A17E1：WATCHID 广播，源地址=LogADDR，CMD=0x41 电流态 / 0x42 电压态。
  * 0x42 接口保留；均压/主从 20ms 任务当前未接入调度。

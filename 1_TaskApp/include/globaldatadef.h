@@ -64,47 +64,20 @@ typedef struct
 extern volatile DATASCOPE DataScope;   /* ISR 写、1ms CAN 任务读写：必须 volatile，防 -O2 缓存 */
 
 /* ============================================================================
- * 1. 模块地址 / CAN 运行态 (MDADDRMES)
+ * 1. 模块地址 / 均流样本 (MDADDRMES)
  *
- * 多机并联时，主机通过 CAN 给各从机分配逻辑地址（0~255），本结构保存
- * 本机地址、已登记模块的地址表，以及均流所需的各模块电流/电压样本。
+ * 本机逻辑地址由 UART 分址；CAN 0x41 维护对端令牌与电流样本。
+ * 已去掉未用的 CAN 地址仲裁字段、0x42 专用数组、系数/均压预留。
  * ============================================================================ */
 typedef struct
 {
-    Uint16      bCalIDCmd:1;    /* 1=收到地址仲裁命令，需要应答 */
-    Uint16      bSendIDCMD:1;   /* 1=需要主动发送本机 ID 请求 */
-    Uint16      bStopAddr:1;    /* 1=停止地址分配流程 */
-    Uint16      bRecAddr:1;     /* 1=已收到地址分配命令，待重构邮箱 */
-    Uint16      res:12;         /* 保留位 */
-} CANADDSTATE_BITS;
-
-typedef union
-{
-    Uint16            all;      /* 整字访问（通信/调试） */
-    CANADDSTATE_BITS  bits;     /* 按位访问 */
-} CANADDSTATE;
-
-typedef struct
-{
-    CANADDSTATE uCanState;                  /* 地址分配状态位（见 CANADDSTATE_BITS） */
-    Uint16 uReqIDnum;                       /* 已请求分配地址的节点数 */
-    Uint16 uTranEND_num;                     /* 地址分配流程结束标志计数 */
-    Uint16 uIndex;                          /* 本机逻辑地址（0~255，分配后有效） */
-    Uint16 MDADDRID_num;                    /* 已登记模块数量 */
-    Uint32 uSelfID;                         /* 本机唯一 ID（硬件序列号/芯片特征 ID） */
-    Uint16 MDADDRID[recnum+1];              /* 各模块逻辑地址表（下标即模块序号） */
-    float uRecMdl_Cur[recnum+1];            /* 各模块实测电流 [A]（均流用） */
-    Uint16 uRecMdl_onoff[recnum+1];         /* 各模块在线/开关机状态 */
-    float uRecMdl_Curset[recnum+1];         /* 各模块电流设定 [A] */
-    float uRecMdl_CursetCoff[recnum+1];     /* 放电均流系数（按容量分配） */
-    float uRecMdl_ReCursetCoff[recnum+1];   /* 充电均流系数（按容量分配） */
-    float uRecMdl_vbat[recnum+1];           /* 各模块电池电压 [V] */
-    float uRecMdl_Ibatset[recnum+1];        /* 各模块电池电流设定 [A] */
-    Uint16 ADDRID_Config[recnum+1];         /* 地址配置表（掉电保存/上位机下发） */
-    Uint16 uRecMdl_RunState[recnum+1];      /* 各模块运行状态（与 SmState_e 对应） */
-    float fAverCur;                         /* 并联平均电流 [A] */
-    float fAverVbat;                        /* 并联平均电池电压 [V] */
-    Uint16 uAverStyle;                      /* 均流方式：0=主从，1=平均 */
+    Uint16 uIndex;                          /* 本机逻辑地址（UART 写入，0~recnum） */
+    Uint16 bCalIDCmd;                       /* ADDRcmd_on=待分址；ADDRcmd_end=已锁定可发 0x41 */
+    Uint16 MDADDRID[recnum+1];              /* 令牌：1=对端本窗可参与均流（下标=模块号） */
+    float  uRecMdl_Cur[recnum+1];           /* 各模块实测电流 [A] */
+    Uint16 uRecMdl_onoff[recnum+1];         /* 各模块 0x41 状态字 */
+    float  uRecMdl_Curset[recnum+1];        /* 各模块电流设定 [A] */
+    float  fAverCur;                        /* 并联均流目标电流幅值 [A] */
 } MDADDRMES;
 
 extern MDADDRMES uMdlAddMes;
@@ -112,19 +85,14 @@ extern MDADDRMES uMdlAddMes;
 /* ============================================================================
  * 2. CAN 调试/统计 (SCANMES)
  *
- * CAN 中断与通信任务写、2ms 任务与安全任务读；故障锁存位一旦置位只能由
- * “停机 + 故障源消失”清除（见 UpdateShutdownFlag）。
+ * 仅 CanComm 写、DataCalc 读 canRecCnt；保留 volatile 防 -O2 缓存。
  * ============================================================================ */
 typedef struct
 {
-    Uint16 uCalADDR_Cyle;           /* 地址重分配超时计数（15s 封顶） */
-    Uint16 uCanRec_count;           /* 收到有效报文的累计数 */
-    Uint16 uCanWatch_Alarm_count;   /* 上位机巡检/看门狗告警计数 */
-    Uint16 uCan_Test;               /* 通信自检计数 */
-    float  utest_temp;              /* 调试临时量 */
+    Uint16 uCanRec_count;           /* 收到有效 0x41 的累计数 */
 } SCANMES;
 
-extern volatile SCANMES sCanMes;   /* CAN 中断/通信任务写、2ms 任务与 ISR 读：必须 volatile，防 -O2 缓存 */
+extern volatile SCANMES sCanMes;
 
 /* ============================================================================
  * 3. 系统控制指令位域
@@ -167,7 +135,7 @@ typedef struct
     Uint16 BusVolSet;               /* 母线电压给定    [0.1V] */
     Uint16 BatVolSet;               /* 电池电压给定    [0.1V] */
     Uint16 OpenLoopDuty;            /* 开环测试占空比  [0.1%] */
-    Uint16 ScopeTrigCmd;            /* 软件示波器触发：0=停止/复位录波，1=立即触发（索引 8） */
+    Uint16 ScopeTrigCmd;            /* 写非零请求一次录波，命令自清；忙时忽略，写 0 无动作（索引 8） */
     Uint16 res;                     /* 保留（对齐/协议占位，索引 9） */
 } CFGParam;
 

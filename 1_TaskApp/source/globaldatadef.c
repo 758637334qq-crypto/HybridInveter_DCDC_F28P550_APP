@@ -18,7 +18,7 @@
 volatile DATASCOPE DataScope;  /* EPWM10 ISR 写、1ms CAN 任务读写 */
 
 MDADDRMES uMdlAddMes;          /* 多机并联地址表与均流样本，通信任务维护 */
-volatile SCANMES   sCanMes;    /* CAN 中断/通信任务写，2ms 任务与 ISR 读 */
+volatile SCANMES   sCanMes;    /* CanComm 写，DataCalc 读 */
 volatile CFGParam  CfgParam;   /* 通信任务写，ZERO ISR 读给定/增益 */
 CanMonitorData_t g_CanMon;     /* 0x11 遥测快照，DataCalc 任务周期刷新 */
 

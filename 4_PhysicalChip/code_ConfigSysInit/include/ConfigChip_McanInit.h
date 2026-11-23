@@ -2,13 +2,14 @@
  * @file    ConfigChip_McanInit.h
  * @brief   DAB 标准 CAN 通讯（F28P550 MCAN，经典 CAN 2.0B，500 kbps，29 位扩展帧）
  *
- * MCAN RX FIFO0(WATCHID/SCOPEID) + RX FIFO1(AVERID) + 3 个 TX Buffer。
+ * MCAN RX FIFO0(WATCHID) + RX FIFO1(AVERID) + 3 个 TX Buffer；SCOPEID 仅上行、硬件滤除。
  *
  * 29 位扩展 ID 位域（与上位机协议一致，不可改）：
  *   Bit 0~18  : ADDR     目的地址（0xFF=上位机，0x10=并联平均广播，0x1F=示波器）
- *   Bit 19~26 : LogADDR  源逻辑地址（本机地址，0~255）
+ *   Bit 19~26 : LogADDR  源逻辑地址（本机地址，0~255；由 UART 分址写入）
  *   Bit 27    : PTP      0=广播，1=点对点
- *   Bit 28    : ADDRcmd  0=启动地址分配，1=地址分配结束/普通报文
+ *   Bit 28    : ADDRcmd  线侧标志位（历史名）；本机发帧恒填 ADDRcmd_end=1
+ *                        逻辑地址不再走 CAN 握手，由 UART 写 uIndex + bCalIDCmd
  *******************************************************************************/
 
 #ifndef BSP_CAN_H_
@@ -27,10 +28,8 @@
 #define BORAD_ALL               0       /* 全网全局广播 */
 #define BORAD_TO                1       /* 定向单播 */
 
-#define ADDRcmd_end             1       /* 地址分配流程结束/确认 */
-#define ADDRcmd_on              0       /* 启动地址分配流程 */
-
-#define uCalADDR_Cyle_15S       (3000)  /* 地址重分配/巡检心跳周期（15s @5ms） */
+#define ADDRcmd_end             1       /* ID.ADDRcmd=1：普通报文（本机发帧恒用） */
+#define ADDRcmd_on              0       /* ID.ADDRcmd=0：历史线侧标志；应用层待分址态见 bCalIDCmd */
 
 #define CAN_TELEMETRY_CMD       0x11
 #define CAN_TELEMETRY_MAX_CH    0x2C    /* 0x00 ~ 0x2C；0x2B/0x2C 为环路参考和前馈 */
@@ -87,7 +86,7 @@ typedef struct
     Uint32 ADDR:19;                     /* Bit 0~18 : 目的地址 */
     Uint32 LogADDR:8;                   /* Bit 19~26: 源逻辑地址 */
     Uint32 PTP:1;                       /* Bit 27   : 0 广播 1 点对点 */
-    Uint32 ADDRcmd:1;                   /* Bit 28   : 地址分配命令 */
+    Uint32 ADDRcmd:1;                   /* Bit 28   : 线侧标志（本机发帧=1） */
     Uint32 res:3;                       /* Bit 29~31: 预留 */
 } CANMSGID_BITS;
 
@@ -133,7 +132,8 @@ typedef struct
 /* ============================================================================
  * 接口
  * ============================================================================ */
-/* ★ MCAN 驱动接口，协议调度由 App_CanComm 执行。 */
+/* ★ MCAN 驱动接口，协议调度由 App_CanComm 执行。
+ *   init_Drv_can：上电同步推完 if/基数状态机；运行恢复用 Reinit+InitPoll。 */
 void init_Drv_can(void);
 Uint16 DabCan_TxReady(Uint16 u16BufIdx);
 /* ★ Send 返回 1 表示已提交；发送成功由 TXBTO 确认。 */
@@ -150,7 +150,9 @@ typedef enum
 
 DAB_CAN_RX_RESULT DabCan_Recv(uint32_t u32FifoNum, DATACanType *pMsg);
 void DabCan_CheckState(void);
-void DabCan_Reinit(void);
+void DabCan_Reinit(void);           /* 复位 MCANA + 启动 if/基数状态机，不阻塞 */
+void DabCan_InitPoll(void);         /* 推进一拍初始化；IDLE 时为空操作 */
+Uint16 DabCan_InitBusy(void);       /* 1=状态机未结束 */
 extern Uint16 g_u16DabCanInitError;
 extern volatile uint32_t g_u32DabCanUnexpectedInitCount;
 extern volatile uint32_t g_u32DabCanRestrictedAsmCount; /* ★ CCCR.ASM 进入次数 */
@@ -159,4 +161,4 @@ extern volatile uint32_t g_au32DabCanRxLostEvents[2];
                                 /* 底层发送：u16BufIdx=0/1/2 对应 eCAN 邮箱 11/12/13，
                                    该缓冲上帧未发完则丢弃本帧 */
 
-#endif /* DRV_MCAN_H_ */
+#endif /* BSP_CAN_H_ */

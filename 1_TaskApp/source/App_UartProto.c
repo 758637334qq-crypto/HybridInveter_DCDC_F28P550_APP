@@ -247,16 +247,8 @@ static void sCmd00Run(const uint16_t *d)
     CfgParam.BatDischgCurSet = d[2];
     bmsAddr = d[3] & 0xFFU;                /* Byte6：BMS 地址（仅本函数使用） */
 
-    /* ★ 首次有效分址也接受地址 0；变更地址时先撤掉未发出的旧 0x41，
-     *   再换 uIndex / 清对端票，避免 CMD 缓冲里带着旧 LogADDR 发出去。 */
-    if ((uMdlAddMes.uIndex != bmsAddr) ||
-        (uMdlAddMes.uCanState.bits.bCalIDCmd != ADDRcmd_end))
-    {
-        DabCan_CancelTx(CAN_TX_BUF_CMD);
-        uMdlAddMes.uIndex = bmsAddr;
-        uMdlAddMes.uCanState.bits.bCalIDCmd = ADDRcmd_end;
-        CurShare_ResetPeers();
-    }
+    /* ★ 首次有效分址也接受地址 0；变更时撤旧 0x41 → 换址 → ResetPeers（见 CanComm_SetLocalAddr）。 */
+    CanComm_SetLocalAddr(bmsAddr);
     ctrl          = (d[3] >> 8) & 0xFFU;   /* Byte7：控制位 */
     mode          = d[4];                 /* Byte8：运行模式 */
 

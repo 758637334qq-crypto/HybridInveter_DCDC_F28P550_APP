@@ -22,7 +22,7 @@ void Task5ms(void)
     /* 串口遥测：排在 Update_CanMon 之后，本拍即发送最新遥测/故障快照（RX 已在 Task_1ms 处理） */
     UartProto_Task_5ms();
 
-    CanComm_Task_5ms(); /* Bus-Off + 地址计时 */
+    CanComm_Task_5ms(); /* Bus-Off / INIT / ASM 恢复 */
 }
 
 /**

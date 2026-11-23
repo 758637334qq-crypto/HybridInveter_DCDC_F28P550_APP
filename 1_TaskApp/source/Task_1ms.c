@@ -10,8 +10,9 @@
 /**
  * @brief  1ms 任务体
  * @note   执行顺序：滤波 → 1/Vbat → 斜坡 → CAN/SCIB 接收 → CAN 发送 → SCI TX。
- *         CAN 接收 / SCI RX 有硬件 FIFO 缓冲，1ms 轮询足够（原在 Task100us）；
+ *         CAN/SCI RX 有硬件 FIFO，1ms 轮询足够（已从 Task100us 迁出）；
  *         SCIB 拼帧/校验/命令在 Task_1ms（FIFO 直递当拍执行），遥测在 Task_5ms。
+ *         逻辑地址由 UartProto 分址，非 CAN 握手。
  */
 void Task1ms(void)
 {
@@ -28,13 +29,12 @@ void Task1ms(void)
     /* V/±Ilim 缓起：1ms 推进，供能量环读 */
     Ctrl_RampCfg();
 
-    /* ---- 接收链路：CAN/SCIB 均有硬件 FIFO 缓冲，1ms 轮询足够（原在 Task100us）----
-     * SCIB 顺序不能反：先做 Boot 静默断帧检查，后经 UartProto_RxTask 喂字节 */
-    CanComm_Task_Rx();       /* CAN 取帧 + 0x20/均流转发 + 地址握手 */
+    /* ---- 接收链路：1ms Rx（非 100us）；SCIB 顺序：Boot 静默检查 → UartProto 喂字节 ---- */
+    CanComm_Task_Rx();       /* CAN 取帧 + 0x20/均流转发 */
     BootProto_Task_Rx();     /* ARM 升级协议：静默断帧检查（字节由 UartProto_RxTask 直递） */
-    UartProto_RxTask();      /* SCIB FIFO 直递：3ms 断帧 → 校验 → 当拍执行；字节同步喂 Boot */
+    UartProto_RxTask();      /* SCIB FIFO 直递：3ms 断帧 → 校验 → 当拍执行；含 UART 分址 */
 
-    CanComm_Task_Tx_1ms();   /* ★ 与接收统一使用应用层（含示波器存满后 3ms/帧上传） */
+    CanComm_Task_Tx_1ms();   /* ★ 与接收统一：0x11/0x41/示波器；先 settle 再发 */
     CustomUart_Task_1ms();   /* TX 环 → TX FIFO → 串口线 */
     HeatFilm_Task();         /* 加热膜：跟 hotCmd；ISR 只跑软 PWM */
     BootProto_Task_1ms();    /* ARM 升级协议：升级态边沿封波 + FlashReady 2s 确认 → 跳 Boot */
