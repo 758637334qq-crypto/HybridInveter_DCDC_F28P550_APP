@@ -8,6 +8,16 @@
 :: 1. Get current script directory path
 set "SCRIPT_DIR=%~dp0"
 
+:: [Merge switch] If outbin\MERGE_OFF.txt exists, skip the merge (post-build exits OK).
+:: To re-enable merging, just delete outbin\MERGE_OFF.txt.
+:: NOTE: in the "no-Boot direct-run" debug linker layout, the merged bin is invalid
+:: (APP codestart @0x080000 is dropped; Boot jumps to empty 0x084000). Keep merge
+:: OFF until the linker cmd is restored to the Boot layout (codestart > FLASHSTART).
+if exist "%SCRIPT_DIR%MERGE_OFF.txt" (
+    echo [SKIP] MERGE_OFF.txt found - firmware merge skipped. Delete outbin\MERGE_OFF.txt to re-enable.
+    goto :EOF
+)
+
 :: 2. Set path to hex_converter.exe utility
 set "CONV_TOOL=%SCRIPT_DIR%hex_converter.exe"
 

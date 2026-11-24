@@ -108,7 +108,6 @@ static inline void Dab_Ctrl_BusVoltLoop(float f32Vo, float f32Iload, float f32Re
     float f32Ff;        /* 前馈：充电 0，放电 0.9 × 滤波负载电流 */
     float f32OutMin;    /* 本拍 PI 状态下限 */
     float f32IPos;      /* 本拍放电上限 */
-    float f32OutFf;     /* Out + Ff */
 
     f32IPos = Ramp.iPos;
 
@@ -131,7 +130,6 @@ static inline void Dab_Ctrl_BusVoltLoop(float f32Vo, float f32Iload, float f32Re
     if (Bus.u16Tick == 0U)
     {
         float  f32Err;
-        float  f32dErr;
         float  f32T;
         float  f32Kp;
         float  f32Ki;
@@ -142,23 +140,15 @@ static inline void Dab_Ctrl_BusVoltLoop(float f32Vo, float f32Iload, float f32Re
          * 判据与内环实际限幅同源，动态上限生效时也不会漏判。 */
         u16DutySat = (stDabPi0.u16DutySat != 0U) || (stDabPi1.u16DutySat != 0U);
 
-        f32Err  = DAB_SAT(Bus.f32Err, -40.0f, 40.0f);   /* 误差限幅 ±40V */
-        f32dErr = f32Err - Bus.f32Err1;
+        f32Err = DAB_SAT(Bus.f32Err, -40.0f, 40.0f);   /* 误差限幅 ±40V */
 
         /* 变增益：|e| 在 [E_LO, E_HI] 线性插值，区间外保持端点 */
         f32T  = DAB_SAT((fabsf(f32Err) - DAB_BUS_GAIN_E_LO) * DAB_BUS_GAIN_INV_SPAN, 0.0f, 1.0f);
         f32Kp = DAB_BUS_KP_LO + DAB_BUS_KP_SPAN * f32T;
         f32Ki = DAB_BUS_KI_LO + DAB_BUS_KI_SPAN * f32T;
 
-        /* 增量式 PI：误差与增量异号（正在收敛）时只缩小积分项，比例项保持原方向 */
-        if (f32Err * f32dErr < 0.0f)
-        {
-            f32DeltaPi = (f32Kp * f32dErr + DAB_BUS_KI_CONV_SCALE * f32Ki * f32Err);
-        }
-        else
-        {
-            f32DeltaPi = f32Kp * f32dErr + f32Ki * f32Err;
-        }
+        /* 增量式 PI：始终全量（已无 e·de 分支） */
+        f32DeltaPi = f32Kp * (f32Err - Bus.f32Err1) + f32Ki * f32Err;
 
         /* 抗饱和：未饱和正常积分；饱和时只允许朝放开饱和的方向积分 */
         if ((u16DutySat == 0U) || (u16IsCharge ? (f32DeltaPi > 0.0f) : (f32DeltaPi < 0.0f)))
@@ -188,14 +178,13 @@ static inline void Dab_Ctrl_BusVoltLoop(float f32Vo, float f32Iload, float f32Re
     Bus.f32Out = __fmax(Bus.f32Out, f32OutMin);
 
     /* 叠前馈，用本模式限流封顶 */
-    f32OutFf = Bus.f32Out + f32Ff;
     if (u16IsCharge)
     {
-        Bus.f32Ref = __fmax(f32OutFf, f32RefMin);   /* 充电：用整机限流幅值的负值封底 */
+        Bus.f32Ref = __fmax(Bus.f32Out + f32Ff, f32RefMin); /* 充电：用整机限流幅值的负值封底 */
     }
     else
     {
-        Bus.f32Ref = __fmin(f32OutFf, f32IPos);     /* 放电：封顶 iPos（正值） */
+        Bus.f32Ref = __fmin(Bus.f32Out + f32Ff, f32IPos);   /* 放电：封顶 iPos（正值） */
     }
 }
 

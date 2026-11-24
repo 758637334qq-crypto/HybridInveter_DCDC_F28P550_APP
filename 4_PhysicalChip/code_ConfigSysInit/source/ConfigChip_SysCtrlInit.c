@@ -7,6 +7,7 @@ Writer:			zy									                                            	*
 *************************************************************************************************/
 #include "f28P55x_device.h"         // f28003x Headerfile Include File
 #include "f28P55x_examples.h"       // f28003x Examples Include File
+#include "device.h"                 // Board oscillator selection used by the PLL setup
 
 // Functions that will be run from RAM need to be assigned to
 // a different section.  This section will then be mapped to a load and
@@ -56,7 +57,7 @@ void InitChip_SysCtrlRegs(void)
 #endif
 
     //
-    // Initialize the SYSPLL control  to generate a 200Mhz clock
+    // Initialize the SYSPLL for the 150 MHz system clock.
     //
     // Defined options to be passed as arguments to this function are defined
     // in f28003x_examples.h.
@@ -70,6 +71,8 @@ void InitChip_SysCtrlRegs(void)
     InitSysPll(XTAL_OSC, IMULT_30, REFDIV_2, ODIV_1, PLLCLK_BY_2, SYSCTL_DCC_BASE0);
 #elif defined(USE_PLL_SRC_INTOSC)
     InitSysPll(INT_OSC2, IMULT_30, REFDIV_1, ODIV_1, PLLCLK_BY_2, SYSCTL_DCC_BASE0);
+#else
+#error "Select a PLL source in device.h"
 #endif
 
 #ifndef _FLASH

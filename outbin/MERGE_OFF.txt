@@ -1,0 +1,6 @@
+Merge switch is OFF.
+While this file exists, generate_merged_bin.bat (CCS post-build step) skips merging.
+To re-enable firmware merging, delete this file.
+Reason: current linker layout is the debug "no-Boot direct-run" layout
+(codestart > BEGIN @0x080000), under which the merged bin has no APP entry
+at 0x084000 and will not boot standalone.
