@@ -134,5 +134,5 @@ void Update_CanMon(void)
     g_CanMon.utest5 = stDabDuty0.f32Duty;    /* 第 0 路发波占空比 */
     g_CanMon.utest6 = stDabDuty1.f32Duty;    /* 第 1 路发波占空比 */
     g_CanMon.utest7 = stDabParam.f32SrRatio; /* 同步整流匝比换算系数 */
-    g_CanMon.utest8 = Bus.f32IloadFf;        /* 负载电流前馈 */
+    g_CanMon.utest8 = Bus.f32IloadFf;        /* I0+I1 低通（监视；前馈已关） */
 }

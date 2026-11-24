@@ -17,6 +17,13 @@
 #define DAB_CHG_TBPRD       (1500U)        /* 50 kHz */
 #define DAB_DIS_TBPRD       (1250U)        /* 60 kHz */
 
+/* 充电开关频率联动防呆：App_DabModel.h 中 DAB_CHARGE_KFL(1.75f)、
+ * DAB_CHARGE_ALPHA_I、DAB_CHARGE_WZ_I_TS 均按 50 kHz(20us) 写死。
+ * 调整 DAB_CHG_TBPRD 改频时，必须同步修改上述三个宏，否则此处编译报错。 */
+#define DAB_CHG_FS_HZ         (DAB_TBCLK_FREQ_HZ / (2UL * (unsigned long)DAB_CHG_TBPRD))
+_Static_assert(DAB_CHG_FS_HZ == 50000UL,
+               "DAB_CHG_TBPRD changed: update DAB_CHARGE_KFL / DAB_CHARGE_ALPHA_I / DAB_CHARGE_WZ_I_TS in App_DabModel.h");
+
 #define DAB_DUTY_MIN        (0.060f)
 #define DAB_D_MIN           DAB_DUTY_MIN
 #define DAB_CHG_D_TOP_MILLI (450U)         /* 固定发波占空比整数源(×1000)，供 C 层静态断言用 */

@@ -62,9 +62,24 @@
 #define DAB_BUS_KP_SPAN         (DAB_BUS_KP_HI - DAB_BUS_KP_LO)                  /* Kp 跨度 */
 #define DAB_BUS_KI_SPAN         (DAB_BUS_KI_HI - DAB_BUS_KI_LO)                  /* Ki 跨度(为负) */
 
-#define BUS_FF_COEF             (0.9f)   /* 负载电流前馈系数 */
 #define BUS_CHG_OUT_MAX         ( 1.0f)     /* 充电: PI 校正量上限(A) */
 #define BUS_DISCH_OUT_MIN       (-1.0f)     /* 放电: PI 校正量下限(A) */
+
+/* 电压大动态：Ki 助推 + 预测停车 + Out 斜率限制（无电压环电流前馈）
+ * 不用 −Kd·dV/dt：陷波后微分仍放大开关纹波，易搅打嗝/给定。制动靠
+ * e_pred 提前退回 Ki_NORM，再用每拍 Out 限步压尖峰。
+ * Ki_FAST 由物理量定标：Kp_HI·Ts/T_i_fast，Ts 或 Kp 改动自动跟随；
+ * |e| 在 6~10V 线性过渡，避免 10V 处增益台阶。 */
+#define DAB_BUS_LS_ENABLE       (1U)        /* 大信号 Ki 助推 */
+#define DAB_BUS_TS_OUTER        (100.0e-6f) /* 外环周期 10kHz：充 50k/5、放 60k/6 */
+#define DAB_BUS_FS              (1.0f / DAB_BUS_TS_OUTER) /* 外环频率 Hz */
+#define DAB_BUS_LS_ON_V         (10.0f)     /* |e| 大信号满助推（低于 ±20V 换向带） */
+#define DAB_BUS_LS_OFF_V        (6.0f)      /* |e| 开始助推 */
+#define DAB_BUS_LS_INV_SPAN     (1.0f / (DAB_BUS_LS_ON_V - DAB_BUS_LS_OFF_V))
+#define DAB_BUS_TI_FAST         (4.0e-3f)   /* 大信号积分时间 s */
+#define DAB_BUS_KI_FAST         (DAB_BUS_KP_HI * DAB_BUS_TS_OUTER / DAB_BUS_TI_FAST)
+#define DAB_BUS_T_LEAD          (0.001f)    /* 预测提前量 s（≈误差滤波+内环迟滞） */
+#define DAB_BUS_OUT_SLEW_A      (0.5f)      /* 外环单拍 |ΔOut| 上限 @10kHz ≈5A/ms */
 
 #define DAB_BUS_KP_LO     (0.02f)
 #define DAB_BUS_KP_HI     (0.2f)
@@ -74,7 +89,7 @@
 /* 轻载打嗝迟滞幅值（充放电统一，判决方向随工况镜像，见 Interrupt_CtrlDab.c）。
  * A = 最大外环 Kp × 封波期允许电压漂移，定值方法：ΔV允许 ≈ A / Kp；
  * 取 Kp=KP_HI(0.20A/V)、ΔV允许=1.0V → A=0.20A。公式只给工程初值，
- * 增量 PI、积分项和负载前馈也影响实际漂移，改 KP_HI/ΔV 后须回归
+ * 增量 PI、积分项也影响实际漂移，改 KP_HI/ΔV 后须回归
  * 打嗝频率与封波期电压波动实测。 */
 #define DAB_BUS_VDRIFT_ALLOW_V      (1.0f)
 #define DAB_BURST_HYST_A            (DAB_BUS_KP_HI * DAB_BUS_VDRIFT_ALLOW_V)
@@ -112,10 +127,10 @@
 #define DAB_SR_ON_CNT           (8U)          /* 拍：连续N拍过开通门限才使能(50kHz≈160us) */
 /* 极短软起：使能后的前 N 拍，SR 窗口按 1/N 线性放宽到目标值。
  * 目的不是平滑功率（功率由 d 决定，与 SR 无关），而是万一判据漏判，
- * 第一拍的窗口只有目标的 1/8，把误开的冲击摊到几拍里。
+ * 第一拍的窗口只有目标的 1/20，把误开的冲击摊到几拍里。
  * 不做长软起：DAB 半开区间电流走体二极管，反向恢复会削弱 ZCS，且轻载打嗝
  * 会反复归零，长软起反而长期停在半开、效率更差。 */
-#define DAB_SR_SOFT_CNT         (20U)          /* 拍：窗口从 1/N 爬到 1 (50kHz≈160us) */
+#define DAB_SR_SOFT_CNT         (20U)          /* 拍：窗口从 1/N 爬到 1 (50kHz≈400us) */
 #define DAB_SR_SOFT_INV         (1.0f / (float)DAB_SR_SOFT_CNT)  /* 软起系数倒数，编译期常量 */
 #define DAB_SR_DUTY_MARGIN      (0.01f)
 #define DAB_SR_DUTY_MAX         (0.44f)

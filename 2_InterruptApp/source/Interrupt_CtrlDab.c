@@ -102,25 +102,23 @@ void Dab_Ctrl_SessionReset(void)
 /*==============================================================================
  * ① 电压外环（两路共用，10kHz）
  *
- * 输入：母线电压 / 负载电流 / 本模式给定下限 / 工况
- * 输出：Bus.f32Ref 总电流给定（正 = 放电，负 = 充电）
+ * 输入：母线电压 / 桥电流和(仅监视) / 本模式给定下限 / 工况
+ * 输出：Bus.f32Ref = Out（无电压环电流前馈）。大信号：Ki_FAST + 预测停车 + Out 限步。
  *============================================================================*/
 #pragma FUNC_ALWAYS_INLINE(Dab_Ctrl_BusVoltLoop);
 static inline void Dab_Ctrl_BusVoltLoop(float f32Vo, float f32Iload, float f32RefMin, Uint16 u16IsCharge)
 {
-    float f32Ff;        /* 前馈：充电 0，放电 0.9 × 滤波负载电流 */
     float f32OutMin;    /* 本拍 PI 状态下限 */
     float f32IPos;      /* 本拍放电上限 */
 
     f32IPos = Ramp.iPos;
 
-    /* 滤波与前馈（每载波拍执行） */
+    /* I0+I1 低通仅监视，不进 Ref；误差低通每载波拍 */
     Bus.f32IloadFf += 0.20f * (f32Iload - Bus.f32IloadFf);
     Bus.f32Err     += DAB_BUS_ALPHA * ((Bus.f32Vref - f32Vo) - Bus.f32Err);
-    f32Ff           = u16IsCharge ? 0.0f : BUS_FF_COEF * Bus.f32IloadFf;
-    Bus.f32VoltFf   = f32Ff;
+    Bus.f32VoltFf   = 0.0f;
 
-    f32OutMin = f32RefMin - f32Ff;
+    f32OutMin = f32RefMin;
     if ((u16IsCharge != 0U) && (g_stDabIsrState.u16ChgBuckOn != 0U))
     {
         /* 充电为负。只允许旧请求占用余量，新请求最多走到本拍限值。 */
@@ -133,9 +131,14 @@ static inline void Dab_Ctrl_BusVoltLoop(float f32Vo, float f32Iload, float f32Re
     if (Bus.u16Tick == 0U)
     {
         float  f32Err;
+        float  f32ErrStep;
+        float  f32ErrAbs;
+        float  f32ErrPred;
         float  f32T;
         float  f32Kp;
         float  f32Ki;
+        float  f32KiEff;
+        float  f32TLs;
         float  f32DeltaPi;
         Uint16 u16DutySat;
 
@@ -144,14 +147,31 @@ static inline void Dab_Ctrl_BusVoltLoop(float f32Vo, float f32Iload, float f32Re
         u16DutySat = (stDabPi0.u16DutySat != 0U) || (stDabPi1.u16DutySat != 0U);
 
         f32Err = DAB_SAT(Bus.f32Err, -40.0f, 40.0f);   /* 误差限幅 ±40V */
+        f32ErrStep = f32Err - Bus.f32Err1;
+        f32ErrAbs  = fabsf(f32Err);
+        f32ErrPred = f32Err + DAB_BUS_T_LEAD * f32ErrStep * DAB_BUS_FS;
 
         /* 变增益：|e| 在 [E_LO, E_HI] 线性插值，区间外保持端点 */
         f32T  = DAB_SAT((fabsf(f32Err) - DAB_BUS_GAIN_E_LO) * DAB_BUS_GAIN_INV_SPAN, 0.0f, 1.0f);
         f32Kp = DAB_BUS_KP_LO + DAB_BUS_KP_SPAN * f32T;
         f32Ki = DAB_BUS_KI_LO + DAB_BUS_KI_SPAN * f32T;
 
-        /* 增量式 PI：始终全量（已无 e·de 分支） */
-        f32DeltaPi = f32Kp * (f32Err - Bus.f32Err1) + f32Ki * f32Err;
+#if DAB_BUS_LS_ENABLE
+        /* 大信号：|e| 在 6~10V 线性过渡，避免增益台阶；预测误差过零则回正常 Ki */
+        f32TLs   = DAB_SAT((f32ErrAbs - DAB_BUS_LS_OFF_V) * DAB_BUS_LS_INV_SPAN, 0.0f, 1.0f);
+        f32KiEff = f32Ki + (DAB_BUS_KI_FAST - f32Ki) * f32TLs;
+        if ((f32Err * f32ErrPred) <= 0.0f)
+        {
+            f32KiEff = f32Ki;
+        }
+#else
+        f32KiEff = f32Ki;
+#endif
+
+        f32DeltaPi = f32Kp * f32ErrStep + f32KiEff * f32Err;
+
+        /* 外环限步：抑制大 Ki 单拍冲击（替代易噪的 −Kd·dV/dt） */
+        f32DeltaPi = DAB_SAT(f32DeltaPi, -DAB_BUS_OUT_SLEW_A, DAB_BUS_OUT_SLEW_A);
 
         /* 抗饱和：未饱和正常积分；饱和时只允许朝放开饱和的方向积分 */
         if ((u16DutySat == 0U) || (u16IsCharge ? (f32DeltaPi > 0.0f) : (f32DeltaPi < 0.0f)))
@@ -159,9 +179,8 @@ static inline void Dab_Ctrl_BusVoltLoop(float f32Vo, float f32Iload, float f32Re
             Bus.f32Out += f32DeltaPi;
         }
 
-        /* 动态限幅（下限优先）：先保证 Out ≥ OutMin，再用 iPos - Ff 封顶。
-         * iPos = 0（放电被禁）时充电的正向余量也为 0，与禁向设计一致。 */
-        Bus.f32Out = __fmin(__fmax(Bus.f32Out, f32OutMin), f32IPos - f32Ff);
+        /* 动态限幅（下限优先）：Out ≥ OutMin，再用 iPos 封顶 */
+        Bus.f32Out = __fmin(__fmax(Bus.f32Out, f32OutMin), f32IPos);
 
         Bus.f32Err1 = f32Err;
     }
@@ -176,18 +195,16 @@ static inline void Dab_Ctrl_BusVoltLoop(float f32Vo, float f32Iload, float f32Re
         Bus.f32Out = __fmax(Bus.f32Out, BUS_DISCH_OUT_MIN);     /* 放电：Out ≥ -1A */
     }
 
-    /* 每拍校正 PI 状态下限：能力收紧也会发生在两次外环更新之间。
-     * 与上方 -1A 校正下限并非冗余：Ff 变号时两者轮流更紧。 */
     Bus.f32Out = __fmax(Bus.f32Out, f32OutMin);
 
-    /* 叠前馈，用本模式限流封顶 */
+    /* Ref = Out，再按工况限流（无电流前馈叠加） */
     if (u16IsCharge)
     {
-        Bus.f32Ref = __fmax(Bus.f32Out + f32Ff, f32RefMin); /* 充电：用整机限流幅值的负值封底 */
+        Bus.f32Ref = __fmax(Bus.f32Out, f32RefMin);
     }
     else
     {
-        Bus.f32Ref = __fmin(Bus.f32Out + f32Ff, f32IPos);   /* 放电：封顶 iPos（正值） */
+        Bus.f32Ref = __fmin(Bus.f32Out, f32IPos);
     }
 }
 
@@ -571,7 +588,7 @@ static inline void Dab_Ctrl_Loop(volatile ST_DAB_PARAM *pstParam, float f32VbusR
                                  float f32I0, float f32I1, Uint16 u16IsCharge, Uint16 u16HoldOff)
 {
     float f32Vslow;                                     /* 陷波母线电压，外环反馈 */
-    float f32Iload;                                     /* 母线总电流，外环前馈 */
+    float f32Iload;                                     /* 母线总电流 I0+I1（仅外环监视滤波） */
     float f32E     = 0.0f;                              /* 充电：N·Vbat */
     float f32Dv    = 0.0f;                              /* 充电：压差 */
     float f32InvDv = 0.0f;                              /* 充电：1/压差 */
@@ -657,9 +674,9 @@ static inline void Dab_Ctrl_Loop(volatile ST_DAB_PARAM *pstParam, float f32VbusR
     /* 外环：两模式共用，输出总电流给定 Bus.f32Ref */
     Dab_Ctrl_BusVoltLoop(f32Vslow, f32Iload, f32RefLo, u16IsCharge);
 
-    /* 本路电流前馈 = 电压环前馈的一半 */
-    stDabPi0.f32CurrFf = DAB_CURR_PER_BRIDGE * Bus.f32VoltFf;
-    stDabPi1.f32CurrFf = stDabPi0.f32CurrFf;
+    /* 电压环电流前馈已废除；内环占空比模型前馈仍由各电流环自行计算 */
+    stDabPi0.f32CurrFf = 0.0f;
+    stDabPi1.f32CurrFf = 0.0f;
 
     /* 方向封波命中：外环以上已跑完（Bus.f32Ref 必须更新，100µs 判向要用），
      * 内环结果本拍会被 OutputReset 清掉，故跳过 sqrt / 除法。 */
