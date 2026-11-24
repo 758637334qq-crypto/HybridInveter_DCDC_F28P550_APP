@@ -74,7 +74,7 @@ SECTIONS
  *    合并 bin 工具链恢复适用（APP 更新后需重新生成合并固件）
  * ============================================================================ */
    codestart        : > BEGIN
-   //codestart        : > FLASHSTART
+//   codestart        : > FLASHSTART
    
    Flash_BootInfo      : > FLASH_BOOTINFO, ALIGN(8)
 

@@ -37,7 +37,8 @@ typedef char DabChgCapOnAboveOff_t[
 volatile ST_DAB_ISR_STATE g_stDabIsrState =
 {
     0.0f,                   /* f32InvBatVolt  : 1/Vbat，0 = 不可用 */
-    -1.0f,                  /* f32DisFedDuty  : 放电前馈比例，-1 = 零前馈 */
+    0.0f,                   /* ▲ f32DisInvE   : 1/(n·Vbat)，0 = 欠压关前馈 */
+    1.0f,                   /* ▲ f32DisRatio  : 电压比 Vset/(n·Vbat) */
     {DAB_PWM_STATE_RESET},  /* stChgAqBr1     : 桥 1 动作值 / 相位 */
     {DAB_PWM_STATE_RESET},  /* stChgAqBr2     : 桥 2 动作值 / 相位 */
     0U,                     /* u16ChgBuckOn   : 压差足够，允许发波 */
@@ -68,20 +69,22 @@ void Dab_Ctrl_InvBatVoltUpdate(void)
     g_stDabIsrState.f32InvBatVolt = (f32VbatTmp >= DAB_BAT_VOLT_MIN) ? __divf32(1.0f, f32VbatTmp) : 0.0f;
 }
 
-/* 放电前馈比例 Vset/(n·Vbat) - 1：电压给定 100us 才更新一次，Vbat 取 10ms 滤波值，
- * 两者都是慢变量，没必要每拍（50/60kHz）重算除法。
- * 欠压 / 断线写 -1：前馈经限幅后归零，失效方向是零前馈。 */
+/* ▲ 放电前馈慢变量预算（100us 执行）：算出 1/(n·Vbat) 与电压比 r = Vset/(n·Vbat)。
+ * 电池欠压时 f32DisInvE 写 0 关前馈；两变量都是慢变 32 位浮点，无需关中断。 */
 void Dab_Ctrl_DisFfUpdate100us(void)
 {
     float f32VbatTmp = stADC.BatVolt.Filt.f32Filt10ms;
 
     if (f32VbatTmp >= DAB_BAT_VOLT_MIN)
     {
-        g_stDabIsrState.f32DisFedDuty = __divf32(Bus.f32Vref, DAB_TURNS_RATIO * f32VbatTmp) - 1.0f;
+        float f32InvE = __divf32(1.0f, DAB_TURNS_RATIO * f32VbatTmp);
+
+        g_stDabIsrState.f32DisInvE  = f32InvE;
+        g_stDabIsrState.f32DisRatio = __fmax(Bus.f32Vref * f32InvE, 0.05f);
     }
     else
     {
-        g_stDabIsrState.f32DisFedDuty = -1.0f;
+        g_stDabIsrState.f32DisInvE = 0.0f;
     }
 }
 
@@ -108,7 +111,6 @@ static inline void Dab_Ctrl_BusVoltLoop(float f32Vo, float f32Iload, float f32Re
     float f32Ff;        /* 前馈：充电 0，放电 0.9 × 滤波负载电流 */
     float f32OutMin;    /* 本拍 PI 状态下限 */
     float f32IPos;      /* 本拍放电上限 */
-    float f32OutFf;     /* Out + Ff */
 
     f32IPos = Ramp.iPos;
 
@@ -131,7 +133,6 @@ static inline void Dab_Ctrl_BusVoltLoop(float f32Vo, float f32Iload, float f32Re
     if (Bus.u16Tick == 0U)
     {
         float  f32Err;
-        float  f32dErr;
         float  f32T;
         float  f32Kp;
         float  f32Ki;
@@ -142,23 +143,15 @@ static inline void Dab_Ctrl_BusVoltLoop(float f32Vo, float f32Iload, float f32Re
          * 判据与内环实际限幅同源，动态上限生效时也不会漏判。 */
         u16DutySat = (stDabPi0.u16DutySat != 0U) || (stDabPi1.u16DutySat != 0U);
 
-        f32Err  = DAB_SAT(Bus.f32Err, -40.0f, 40.0f);   /* 误差限幅 ±40V */
-        f32dErr = f32Err - Bus.f32Err1;
+        f32Err = DAB_SAT(Bus.f32Err, -40.0f, 40.0f);   /* 误差限幅 ±40V */
 
         /* 变增益：|e| 在 [E_LO, E_HI] 线性插值，区间外保持端点 */
         f32T  = DAB_SAT((fabsf(f32Err) - DAB_BUS_GAIN_E_LO) * DAB_BUS_GAIN_INV_SPAN, 0.0f, 1.0f);
         f32Kp = DAB_BUS_KP_LO + DAB_BUS_KP_SPAN * f32T;
         f32Ki = DAB_BUS_KI_LO + DAB_BUS_KI_SPAN * f32T;
 
-        /* 增量式 PI：误差与增量异号（正在收敛）时只缩小积分项，比例项保持原方向 */
-        if (f32Err * f32dErr < 0.0f)
-        {
-            f32DeltaPi = (f32Kp * f32dErr + DAB_BUS_KI_CONV_SCALE * f32Ki * f32Err);
-        }
-        else
-        {
-            f32DeltaPi = f32Kp * f32dErr + f32Ki * f32Err;
-        }
+        /* 增量式 PI：始终全量（已无 e·de 分支） */
+        f32DeltaPi = f32Kp * (f32Err - Bus.f32Err1) + f32Ki * f32Err;
 
         /* 抗饱和：未饱和正常积分；饱和时只允许朝放开饱和的方向积分 */
         if ((u16DutySat == 0U) || (u16IsCharge ? (f32DeltaPi > 0.0f) : (f32DeltaPi < 0.0f)))
@@ -188,14 +181,13 @@ static inline void Dab_Ctrl_BusVoltLoop(float f32Vo, float f32Iload, float f32Re
     Bus.f32Out = __fmax(Bus.f32Out, f32OutMin);
 
     /* 叠前馈，用本模式限流封顶 */
-    f32OutFf = Bus.f32Out + f32Ff;
     if (u16IsCharge)
     {
-        Bus.f32Ref = __fmax(f32OutFf, f32RefMin);   /* 充电：用整机限流幅值的负值封底 */
+        Bus.f32Ref = __fmax(Bus.f32Out + f32Ff, f32RefMin); /* 充电：用整机限流幅值的负值封底 */
     }
     else
     {
-        Bus.f32Ref = __fmin(f32OutFf, f32IPos);     /* 放电：封顶 iPos（正值） */
+        Bus.f32Ref = __fmin(Bus.f32Out + f32Ff, f32IPos);   /* 放电：封顶 iPos（正值） */
     }
 }
 
@@ -203,29 +195,70 @@ static inline void Dab_Ctrl_BusVoltLoop(float f32Vo, float f32Iload, float f32Re
  * ② 放电内环
  *============================================================================*/
 
-/* 放电前馈基准：标称模型下的占空比，按 Vset/(n·Vbat)-1 线性；
- * 死区外再做一次比例修正，修正量限幅到基础值的 ±10%，边界处连续归零。 */
+/* ▲ 放电模型前馈：按单桥目标电流 f32Iref 反解归一化占空比 u ∈ [0,1]
+ *   1) 算归一化电流 j = K·Iref / (n·Vbat)；
+ *   2) 升压区 (r ≥ 1)：低压锁 0.44，轻载用精确开方、重载用切线求高压交叠量 q；
+ *   3) 降压区 (r < 1)：轻载开方求低压脉宽 b（受 bmax 限幅）并反查 u，末尾 2% 平滑桥接，
+ *      超过 j0 后再按线性叠加高压交叠量 q；
+ *   4) q 在物理最大功率点封顶，再反算回 u（与 Dab_Ctrl_DisDutyMap 互逆）。 */
 #pragma FUNC_ALWAYS_INLINE(Dab_Ctrl_DisFfCalc);
-static inline float Dab_Ctrl_DisFfCalc(float f32Vset, float f32Vbus)
+static inline float Dab_Ctrl_DisFfCalc(float f32Iref)
 {
-    float f32Dr   = g_stDabIsrState.f32DisFedDuty;   /* 100us 预算，热路径不做除法 */
-    float f32Ff   = DAB_SAT(0.45f + ((f32Dr <= 0.0f) ? 4.5f : 2.5f) * f32Dr,
-                            0.0f, DAB_DIS_FF_MAX);
-    float f32Err  = f32Vbus - f32Vset;
-    float f32Trim;
+    float f32InvE = g_stDabIsrState.f32DisInvE;
+    float f32R    = g_stDabIsrState.f32DisRatio;
+    float f32J;
+    float f32Q;
+    float f32U;
 
-    if (fabsf(f32Err) > DAB_DIS_FF_ERR_DEADBAND)
+    /* 电池欠压或给定极小时直接输出 0 */
+    if ((f32InvE <= 0.0f) || (f32Iref < DAB_DIS_FF_IREF_MIN))
     {
-        f32Trim = DAB_DIS_FF_KP * (f32Err - ((f32Err > 0.0f) ? DAB_DIS_FF_ERR_DEADBAND
-                                                             : -DAB_DIS_FF_ERR_DEADBAND));
-        f32Trim = DAB_SAT(f32Trim, -DAB_DIS_FF_TRIM_MAX, DAB_DIS_FF_TRIM_MAX);
+        return 0.0f;
+    }
+
+    f32J = DAB_DIS_FF_K * f32Iref * f32InvE;
+
+    if (f32R >= 1.0f)
+    {
+        /* ▲ 升压区：Vset ≥ n·Vbat */
+        float f32Dr = f32R - 1.0f;
+        float f32J1 = __divf32(DAB_DIS_FF_B2 * f32Dr, f32R * f32R);
+
+        if (f32J <= f32J1)
+        {
+            f32Q = __sqrt(f32J * f32Dr);                                                    /* 轻中载 DCM：精确开方 */
+        }
+        else
+        {
+            f32Q = __divf32(DAB_DIS_FF_B * f32Dr, 2.0f * f32R) + f32R * f32J * DAB_DIS_FF_INV_2B; /* 重载：一阶切线 */
+        }
     }
     else
     {
-        f32Trim = 0.0f;
+        /* ▲ 降压区：Vset < n·Vbat */
+        float f32J0 = __divf32(2.0f * (1.0f - f32R) * DAB_DIS_FF_B2, 1.0f + f32R);
+
+        if (f32J <= f32J0)
+        {
+            float f32K    = __divf32(f32J, f32J0);                                  /* 当前电流占 j0 的比例 (0~1] */
+            float f32BMax = __fmin(DAB_DIS_FF_B, 0.25f * (1.0f + f32R) - 0.025f);   /* ▲ 保留原模型随电压比收紧的 bmax */
+            float f32B    = __fmin(DAB_DIS_FF_B * __sqrt(f32K), f32BMax);
+            float f32T    = __fmax((f32K - 0.98f) * 50.0f, 0.0f);                   /* ▲ 仅末尾 2% 线性桥接到 u_q0，消除跳变 */
+
+            f32U = (f32B <= 0.30f) ? ((f32B - DAB_DUTY_LV_MIN) * DAB_LV_INV_SLOPE1)
+                                   : (DAB_U_MID1 + (f32B - 0.30f) * DAB_LV_INV_SLOPE2);
+            f32U += f32T * (DAB_DIS_FF_U_Q0 - f32U);
+            return DAB_SAT(f32U, 0.0f, 1.0f);
+        }
+
+        f32Q = __divf32((1.0f + f32R) * (f32J - f32J0), 4.0f * f32R * DAB_DIS_FF_B);
     }
 
-    return __fmin(f32Ff * (1.0f - f32Trim), DAB_DIS_FF_MAX);
+    /* ▲ 限制 q 不越过最大功率点，再反算回 u */
+    f32Q = __fmin(f32Q, __divf32(2.0f * f32R * DAB_DIS_FF_B, 1.0f + 2.0f * f32R));
+    f32U = DAB_DIS_FF_U_Q0 + f32Q * DAB_HV_INV_SLOPE;
+
+    return DAB_SAT(f32U, 0.0f, 1.0f);
 }
 
 /* 按上拍映射输入 u 选增益调度倍率，分段边界与 Dab_Ctrl_DisDutyMap 一致 */
@@ -266,10 +299,14 @@ static inline void Dab_Ctrl_DisCurrLoop(ST_DAB_PI *pstPi, ST_DAB_DUTY *pstDuty,
 
     pstPi->f32Ref = f32Ref;
 
-    /* 前馈软起：本路给定 5A 时系数到 1。每拍由基准值乘系数重算，
-     * 不做原地累乘（否则前馈慢速更新时会退化成指数衰减）。 */
-    pstPi->f32DutyFf = f32DffBase * __fmin(1.0f, f32Ref * DAB_FF_SOFTSTART_K);
-    f32Ff            = pstPi->f32DutyFf;
+    /* 上坡限步：剩余行程 / 5，最低 DAB_DUTY_STEP_MIN；
+     * 下坡用固定步长（甩载不等待），刻意非对称。 */
+    f32StepMax = __fmax((f32OutMax - f32Duty) * DAB_DUTY_MAX_STEPS_INV, DAB_DUTY_STEP_MIN);
+
+    /* ▲ 前馈缓入（零新增内存，复用休眠已清零的 f32DutyFf）：
+     * 上升每拍最多加 f32StepMax（唤醒首拍最多 0.20，约 5 拍爬满），下降当拍直跟。 */
+    f32Ff            = __fmin(f32DffBase, pstPi->f32DutyFf + f32StepMax);
+    pstPi->f32DutyFf = f32Ff;
 
     /* 增量 PI × 调度倍率：段③映射斜率变小、环路增益下降，用斜率反比补回。
      * 只缩放 PI 增量，前馈、映射、限步都不参与。 */
@@ -277,9 +314,6 @@ static inline void Dab_Ctrl_DisCurrLoop(ST_DAB_PI *pstPi, ST_DAB_DUTY *pstDuty,
     f32DeltaPi = pstPi->f32K1 * f32Err - pstPi->f32K2 * pstPi->f32Err1;
     f32DeltaPi *= Dab_Ctrl_DisGainSched(f32Duty);
 
-    /* 上坡限步：剩余行程 / 5，最低 DAB_DUTY_STEP_MIN；
-     * 下坡用固定步长（甩载不等待），刻意非对称。 */
-    f32StepMax = __fmax((f32OutMax - f32Duty) * DAB_DUTY_MAX_STEPS_INV, DAB_DUTY_STEP_MIN);
     if (f32DeltaPi > 0.0f)
     {
         f32DeltaPi = __fmin(f32DeltaPi, f32StepMax);
@@ -674,8 +708,8 @@ static inline void Dab_Ctrl_Loop(volatile ST_DAB_PARAM *pstParam, float f32VbusR
     /* 内环（休眠门已在上方统一拦截，分支内只剩正常调节数学） */
     if (u16IsCharge == 0U)//放电
     {
-        /* 两路共用基准前馈；软起系数在内环按本路给定施加 */
-        float f32Dff = Dab_Ctrl_DisFfCalc(Bus.f32Vref, f32Vslow);
+        /* ▲ 两路共用单桥模型前馈：入参必须是单桥给定（总给定 × 0.5） */
+        float f32Dff = Dab_Ctrl_DisFfCalc(DAB_CURR_PER_BRIDGE * Bus.f32Ref);
 
         Dab_Ctrl_DisCurrLoop(&stDabPi0, &stDabDuty0, f32I0, f32Dff);
         Dab_Ctrl_DisCurrLoop(&stDabPi1, &stDabDuty1, f32I1, f32Dff);

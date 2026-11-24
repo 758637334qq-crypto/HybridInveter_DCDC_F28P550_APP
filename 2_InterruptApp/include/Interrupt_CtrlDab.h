@@ -12,14 +12,11 @@
 #define DAB_SAT(x, lo, hi)   __fmax(__fmin((x), (hi)), (lo))
 
 /*==============================================================================
- * 一、并联桥与放电前馈软起
+ * 一、并联桥分流
  *============================================================================*/
 #define DAB_BRIDGE_NUM          (2U)                            /* 并联桥数 */
 #define DAB_CURR_PER_BRIDGE     (1.0f / (float)DAB_BRIDGE_NUM)  /* 每桥给定 = 总给定 × 0.5 */
-
-/* 前馈软起：本路给定（总给定的一半）达到 5A 时系数到 1，即总给定 10A 时前馈满 */
-#define DAB_FF_SOFTSTART_A      (5.0f)
-#define DAB_FF_SOFTSTART_K      (1.0f / DAB_FF_SOFTSTART_A)
+/* ▲ 已移除旧版 DAB_FF_SOFTSTART_A/K（模型前馈按单桥给定反解，不再乘 Iref/5） */
 
 /*==============================================================================
  * 二、充电发波边界
@@ -60,12 +57,19 @@
 #define DAB_SCHED_S4_SCALE_3  (DAB_LV_SLOPE2 / DAB_HV_SLOPE)    /* 段③ 只动 S4 */
 
 /*==============================================================================
- * 四、放电前馈曲线
+ * ▲ 四、放电模型前馈参数（按单桥电流反解归一化占空比 u）
+ *   K = 0.8 × fs(60kHz) × Lk(35uH) = 1.68（按标称漏感 -20% 留裕量）：
+ *   标称稳态下前馈约承担 80% 给定电流（-20% 漏感下约 100%），实际受压差/死区影响，余量由 PI 修平。
  *============================================================================*/
-#define DAB_DIS_FF_MAX          (0.70f)
-#define DAB_DIS_FF_ERR_DEADBAND (5.0f)    /* V */
-#define DAB_DIS_FF_KP           (0.0075f) /* 1/V */
-#define DAB_DIS_FF_TRIM_MAX     (0.10f)   /* 基础前馈的 ±10% */
+#define DAB_DIS_FF_K            (1.68f)                           /* 0.8 × 60kHz × 35uH */
+#define DAB_DIS_FF_B            (DAB_DUTY_LV_MAX)                 /* 低压最大脉宽 0.44 */
+#define DAB_DIS_FF_B2           (DAB_DIS_FF_B * DAB_DIS_FF_B)     /* B^2，编译期常量 */
+#define DAB_DIS_FF_INV_2B       (1.0f / (2.0f * DAB_DIS_FF_B))    /* 1/(2B)，避免 ISR 除法 */
+#define DAB_DIS_FF_IREF_MIN     (0.05f)                           /* 单桥给定低于此值关前馈(A) */
+#define DAB_LV_INV_SLOPE1       (1.0f / DAB_LV_SLOPE1)            /* 映射段①斜率倒数 */
+#define DAB_LV_INV_SLOPE2       (1.0f / DAB_LV_SLOPE2)            /* 映射段②斜率倒数 */
+#define DAB_HV_INV_SLOPE        (1.0f / DAB_HV_SLOPE)             /* 映射段③斜率倒数 */
+#define DAB_DIS_FF_U_Q0         (DAB_U_MID2 + (0.50f - DAB_DUTY_HV_BASE) * DAB_HV_INV_SLOPE) /* 高压刚好 50%(q=0) 对应的 u */
 
 /*==============================================================================
  * 五、封波：强制 4 路 ePWM 全部输出低电平（灭弧）
@@ -142,7 +146,8 @@ typedef struct
 {
     /* ① 跨节拍预算 */
     float  f32InvBatVolt;   /* 1/Vbat；0 = 不可用（BatCurr 输出 0） */
-    float  f32DisFedDuty;   /* 放电前馈比例 Vset/(n·Vbat)-1，100us 预算；-1 = 零前馈 */
+    float  f32DisInvE;      /* ▲ 放电前馈：1/(n·Vbat)，100us 预算；0 = 欠压关前馈 */
+    float  f32DisRatio;     /* ▲ 放电前馈：电压比 Vset/(n·Vbat)，100us 预算 */
 
     /* ② 两桥 AQ 动作值缓存 */
     DabAqLast_t stChgAqBr1;
@@ -189,9 +194,9 @@ typedef struct
 void Dab_Ctrl_InvBatVoltUpdate(void);
 
 /**
- * @brief  100us 任务：预算放电前馈比例 Vset/(n·Vbat) - 1
- * @details 电压给定 100us 才更新一次，Vbat 取 10ms 滤波值，无需每拍做除法；
- *          低于 DAB_BAT_VOLT_MIN 写 -1，前馈经限幅后归零。
+ * @brief  ▲ 100us 任务：预算放电前馈慢变量 1/(n·Vbat) 与电压比 Vset/(n·Vbat)
+ * @details 电压给定与 10ms 滤波电池电压都是慢变量，100us 预算一次给 ISR 复用；
+ *          电池低于 DAB_BAT_VOLT_MIN 时 f32DisInvE 写 0，ISR 自动归零前馈。
  */
 void Dab_Ctrl_DisFfUpdate100us(void);
 

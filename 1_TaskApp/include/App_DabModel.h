@@ -65,16 +65,12 @@
 #define BUS_FF_COEF             (0.9f)   /* 负载电流前馈系数 */
 #define BUS_CHG_OUT_MAX         ( 1.0f)     /* 充电: PI 校正量上限(A) */
 #define BUS_DISCH_OUT_MIN       (-1.0f)     /* 放电: PI 校正量下限(A) */
-#define BUS_CHG_REF_MIN         ( 0.5f)     /* 充电: Ref 最小值, 保证持续发波(占位值, 需标定) */
-#define BUS_DISCH_REF_MIN       ( 0.5f)     /* 放电: Ref 最小值, 保证持续发波(占位值, 需标定) */
 
 #define DAB_BUS_KP_LO     (0.02f)
 #define DAB_BUS_KP_HI     (0.2f)
 
 #define DAB_BUS_KI_LO     (0.0006f)
 #define DAB_BUS_KI_HI     (0.0002f)
-#define DAB_BUS_KI_CONV_SCALE   (0.1f)   /* 充电外环收敛段积分项保留比例 */
-
 /* 轻载打嗝迟滞幅值（充放电统一，判决方向随工况镜像，见 Interrupt_CtrlDab.c）。
  * A = 最大外环 Kp × 封波期允许电压漂移，定值方法：ΔV允许 ≈ A / Kp；
  * 取 Kp=KP_HI(0.20A/V)、ΔV允许=1.0V → A=0.20A。公式只给工程初值，
