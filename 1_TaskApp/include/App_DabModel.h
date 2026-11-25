@@ -65,21 +65,20 @@
 #define BUS_CHG_OUT_MAX         ( 1.0f)     /* 充电: PI 校正量上限(A) */
 #define BUS_DISCH_OUT_MIN       (-1.0f)     /* 放电: PI 校正量下限(A) */
 
-/* 电压大动态：Ki 助推 + 预测停车 + Out 斜率限制（无电压环电流前馈）
- * 不用 −Kd·dV/dt：陷波后微分仍放大开关纹波，易搅打嗝/给定。制动靠
- * e_pred 提前退回 Ki_NORM，再用每拍 Out 限步压尖峰。
- * Ki_FAST 由物理量定标：Kp_HI·Ts/T_i_fast，Ts 或 Kp 改动自动跟随；
- * |e| 在 6~10V 线性过渡，避免 10V 处增益台阶。 */
+/* 电压大动态：Ki 助推 + 连续预测退坡 + 加载向 Out 限步（无电压环电流前馈）
+ * 助推驱动量 = min(|e|, sign(e)·e_pred) 在 6~10V 线性过渡（无 25× 硬跳变）；
+ * 积分单独保存，限流 / 封波不把比例项折进积分；
+ * 加载向限制 I+Kp·e 单拍增量（触发限步时同步冻结加载积分），退流向不限。 */
 #define DAB_BUS_LS_ENABLE       (1U)        /* 大信号 Ki 助推 */
 #define DAB_BUS_TS_OUTER        (100.0e-6f) /* 外环周期 10kHz：充 50k/5、放 60k/6 */
 #define DAB_BUS_FS              (1.0f / DAB_BUS_TS_OUTER) /* 外环频率 Hz */
-#define DAB_BUS_LS_ON_V         (10.0f)     /* |e| 大信号满助推（低于 ±20V 换向带） */
-#define DAB_BUS_LS_OFF_V        (6.0f)      /* |e| 开始助推 */
+#define DAB_BUS_LS_ON_V         (10.0f)     /* 大信号满助推门限（低于 ±20V 换向带） */
+#define DAB_BUS_LS_OFF_V        (6.0f)      /* 大信号助推起止门限 */
 #define DAB_BUS_LS_INV_SPAN     (1.0f / (DAB_BUS_LS_ON_V - DAB_BUS_LS_OFF_V))
 #define DAB_BUS_TI_FAST         (4.0e-3f)   /* 大信号积分时间 s */
 #define DAB_BUS_KI_FAST         (DAB_BUS_KP_HI * DAB_BUS_TS_OUTER / DAB_BUS_TI_FAST)
-#define DAB_BUS_T_LEAD          (0.001f)    /* 预测提前量 s（≈误差滤波+内环迟滞） */
-#define DAB_BUS_OUT_SLEW_A      (0.5f)      /* 外环单拍 |ΔOut| 上限 @10kHz ≈5A/ms */
+#define DAB_BUS_T_LEAD          (0.001f)    /* 预测提前量 1ms（≈误差滤波+内环迟滞） */
+#define DAB_BUS_OUT_SLEW_A      (1.5f)      /* 加载向单拍 |Δ(I+Kp·e)| 上限 @10kHz ≈15A/ms（退流不限，不回写积分） */
 
 #define DAB_BUS_KP_LO     (0.02f)
 #define DAB_BUS_KP_HI     (0.2f)

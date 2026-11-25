@@ -85,7 +85,6 @@ static void sPiReset(ST_DAB_PI *pstPi)
     pstPi->f32Err1 = 0.0f;
     pstPi->f32Out = 0.0f;
     pstPi->f32Ref = 0.0f;
-    pstPi->f32CurrFf = 0.0f;
     pstPi->f32DutyFf = 0.0f;
     pstPi->u16DutySat = 0U;   /* 饱和标志一并清零，换向/复位后外环从"未饱和"起步 */
 }
@@ -115,8 +114,7 @@ static void sBusClear(void)
 {
     Bus.f32Err         = 0.0f;
     Bus.f32Err1        = 0.0f;
-    Bus.f32IloadFf     = 0.0f;
-    Bus.f32VoltFf      = 0.0f;
+    Bus.f32Integ       = 0.0f;
     Bus.f32Out         = 0.0f;
     Bus.f32Ref         = 0.0f;
 

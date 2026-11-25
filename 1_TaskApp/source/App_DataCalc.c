@@ -51,7 +51,7 @@ void Update_CanMon(void)
     g_CanMon.LoopCtrl.vLoop2_Out    = g_CanMon.LoopCtrl.vLoop1_Out;
     /* 电压给定约 360~450V，0.01V 放不进 Int16，这里用 0.1V。前馈是电流，单位 0.01A。 */
     g_CanMon.LoopCtrl.vLoop_Ref_dV  = (Int16)(Bus.f32Vref * 10.0f + 0.5f);
-    g_CanMon.LoopCtrl.vLoop_Ff_cA   = (Int16)(Bus.f32VoltFf * 100.0f);
+    g_CanMon.LoopCtrl.vLoop_Ff_cA   = 0;   /* 预留：电压环电流前馈已废除，变量已删除 */
 
     /* 内环误差取电流环保存的上一拍误差 f32Err1（单位 A，×100 → 0.01A） */
     g_CanMon.LoopCtrl.iLoop1_Err_cA = (Int16)(stDabPi0.f32Err1 * 100.0f);
@@ -65,8 +65,8 @@ void Update_CanMon(void)
     /* 电流环前馈就是占空比前馈：放电为软起后的 u_ff，充电为开方 d_ff */
     g_CanMon.LoopCtrl.iLoop1_DutyFf = (Uint16)(stDabPi0.f32DutyFf * 10000.0f);
     g_CanMon.LoopCtrl.iLoop2_DutyFf = (Uint16)(stDabPi1.f32DutyFf * 10000.0f);
-    g_CanMon.LoopCtrl.iLoop1_Ff_cA  = (Int16)(stDabPi0.f32CurrFf * 100.0f);
-    g_CanMon.LoopCtrl.iLoop2_Ff_cA  = (Int16)(stDabPi1.f32CurrFf * 100.0f);
+    g_CanMon.LoopCtrl.iLoop1_Ff_cA  = 0;   /* 预留：电压环电流前馈已废除，变量已删除 */
+    g_CanMon.LoopCtrl.iLoop2_Ff_cA  = 0;
 
     /* ----- 设定值 (CfgParam: 电压 0.1V, 电流 0.1A) ----- */
     g_CanMon.Setpoint.voutSet_dV    = CfgParam.BatVolSet;      /* 输出电压给定 = 电池电压设定 */
@@ -134,5 +134,5 @@ void Update_CanMon(void)
     g_CanMon.utest5 = stDabDuty0.f32Duty;    /* 第 0 路发波占空比 */
     g_CanMon.utest6 = stDabDuty1.f32Duty;    /* 第 1 路发波占空比 */
     g_CanMon.utest7 = stDabParam.f32SrRatio; /* 同步整流匝比换算系数 */
-    g_CanMon.utest8 = Bus.f32IloadFf;        /* I0+I1 低通（监视；前馈已关） */
+    g_CanMon.utest8 = 0.0f;                  /* 预留：原 I0+I1 低通，变量已删除 */
 }

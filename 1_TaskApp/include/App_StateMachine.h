@@ -74,12 +74,23 @@ typedef enum
  * 3. 电压/电流工程判定阈值与 100µs 换向防抖
  * ========================================================================== */
 #define SM_V_BUS_DIFF_MAX             (30.0f)       /**< 继电器允许最大母线压差 (30V) */
-#define SM_V_MODE_BAND                (20.0f)       /**< 起机预检 / 在线电压换向：相对设定 ±20V */
+#define SM_V_MODE_BAND_LO             (10.0f)       /**< 放→充 电压反时限起算带：高于设定 +10V（对应 5ms） */
+#define SM_V_MODE_BAND                (20.0f)       /**< 充→放 电压速切带（低于设定 -20V 直接 300µs 切放电）/ 放→充 1ms 参考带 */
 
 #define SM_N_PRECHECK_WIN             (20U)         /**< 预检滑动窗 40ms */
 #define SM_N_PRECHECK_TH              (15U)         /**< 窗内「PCS < 设定值」命中门限 → 放电（无死区带，靠多数票抑制带内抖动） */
-#define SM_N_IREF_DEBOUNCE            (4U)          /**< RUN：电流给定换向确认 ≈400µs */
-#define SM_N_VOLT_DEBOUNCE            (10U)         /**< 仅 RUN 计票：连续 10 个 100 µs 节拍约为 1 ms */
+#define SM_N_IREF_SWITCH              (4U)          /**< RUN：电流给定换向确认 ≈400µs（两方向同一时长，需分开再拆两个宏） */
+#define SM_N_VOLT_TO_DISCH            (3U)          /**< RUN：充→放 电压低于设定 20V 直接 3 拍（300µs）切放电 */
+
+/* 放→充 在线电压反时限积分计票（100µs 节拍，满计 SM_VOLT_ACC_FULL = 500）：
+ *   ΔV <= 10V  → 清零不计票
+ *   ΔV  = 10V  → 每拍 +10  → 50 拍 = 5.0ms
+ *   ΔV  = 20V  → 每拍 +50  → 10 拍 = 1.0ms
+ *   ΔV >= 32.5V→ 每拍 +100 →  5 拍 = 0.5ms（最快下限，防单拍毛刺） */
+#define SM_VOLT_ACC_FULL              (500U)        /**< 放→充 电压反时限满计门限 */
+#define SM_VOLT_ACC_STEP_MIN          (10.0f)       /**< ΔV=10V 时每 100µs 增量（500/10 = 50拍 = 5ms） */
+#define SM_VOLT_ACC_STEP_MAX          (100.0f)      /**< 最大每 100µs 增量（500/100 = 5拍 = 0.5ms） */
+#define SM_VOLT_ACC_SLOPE             (4.0f)        /**< 增量斜率：(50-10)/(20-10) = 4/V，20V 时恰好 1ms */
 
 
 /* ==========================================================================
@@ -154,8 +165,8 @@ typedef struct
     Uint16     relayStable;                         /**< RELAY 压差连续平稳计数（与超时并行，不能并进 stateTick） */
     Uint16     precheckLowCnt;                      /**< 预检窗内低压命中次数（非计时） */
 
-    Uint16     irefDebounce;                        /**< RUN：电流给定换向确认（400µs）；满计目标=反向 */
-    Uint16     voltDebounce;                        /**< 仅 RUN 计票，满计表示电压条件确认需要反向 */
+    Uint16     irefDebounce;                        /**< RUN：反向给定且本向电流已退出（充 iAct>-0.5A / 放 iAct<0.5A）；充→放 / 放→充 均 400µs */
+    Uint16     voltDebounce;                        /**< 仅 RUN 电压计票（充→放：<-20V 300µs；放→充：>+10V 反时限 5ms~0.5ms） */
     Uint16     standbyDwellN;                       /**< 本趟 STANDBY 目标驻留拍数（100µs） */
 
     Uint32     openTestTime;                        /**< 调试与发波累计运行时长计数器 */

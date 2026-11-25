@@ -256,58 +256,111 @@ static void SM_StartClosedLoop(Uint16 u16Mode, Uint16 u16IsSwitch)
 }
 
 /**
- * @brief  100µs 自动换向计票(只计票, 不改 workMode; 提交统一在 SM_Standby_100us)
+ * @brief  100µs 自动换向计票(只数票, 不改方向; 真正换向由调用方 SM_Standby_100us 提交)
  *
- * 【函数说明】自动换向的"感知层"。两条独立确认通道, 任一满计即认为"要反向":
- *   ① 电压通道(仅 RUN 计票, 10 拍≈1ms): 母线电压越出设定带 ±20V;
- *      RAMP_CLOSE 期间软起尚未稳定, 自动换向被抑制, 不进本函数计票;
- *   ② 电流给定通道(仅 RUN 计票, 4 拍≈400µs): 外环给定已翻到反向符号。
- * 本函数绝不直接修改 workMode —— 计票与提交分离, 提交点唯一(SM_Standby_100us),
- * 避免 100µs 内多处改向造成竞态。
+ * 【一句话逻辑】
+ *   当前在充电: 母线跌破"设定值 - 20V" → 连续数 3 拍(300µs) → 建议换放电;
+ *                或 Ref>+0.5A 且 iAct>-0.5A → 连续数 4 拍(400µs) → 建议换放电。
+ *   当前在放电: 母线高出设定值 10V 以上, 并且基本没电流 → 按压差加速数票
+ *                (ΔV=10V 要 5ms, ΔV=20V 要 1ms, ΔV≥32.5V 只要 0.5ms) → 建议换充电;
+ *                或 Ref<-0.5A 且 iAct<0.5A → 连续数 4 拍(400µs) → 建议换充电。
+ *   两路任意一路先数满, 就返回 1("该换向了")。
  *
- * 【原理·方向怎么翻】CLOSE/RUN 时 workMode 只能是充或放, 合法候选只有"反方向"。
- * 计数器不含方向位, 只表达"反向条件连续成立的时长"; 目标方向由提交点按当前
- * workMode 取反得到(充↔放)。
+ * 【为什么数票而不是一拍就切】电压/电流都有毛刺, 必须连续成立才算数, 中间断一拍就清零重来。
  *
- * 调用方已确定反向目标并检查禁向，本函数只累计电压和电流给定条件。
- *
- * 【防抖语义】连续成立才累加, 任一拍不成立立即清零(非滑窗平均) —— 抗毛刺,
- * 且"条件消失"的响应与"条件出现"一样快。
- *
- * 【数据来源】Bus.f32Ref 为 ISR 产物, 任务侧读到 1 拍旧值属正常, 判向用途可容忍。
+ * 【数据来源】Bus.f32Ref 是 ISR 算出来的电流给定, 任务里读到的是上一拍的值, 只用来判方向, 没问题。
+ * 电流给定通道按本向符号加冗余: 充电未退到 iAct>-0.5A / 放电未退到 iAct<0.5A 时不计票。
  */
-static void SM_ModeArbitrate_100us(void)
+static Uint16 SM_ModeArbitrate_100us(void)
 {
-    const Uint16 charging = (RunState.workMode == (Uint16)WORK_MODE_CHARGE);
-    const float vbus = stADC.VmBusVolt.f32Notch;
-    const float iAct = stADC.BusCurr1.f32IsrResult + stADC.BusCurr2.f32IsrResult;
-    float iRef;
+    /* 当前是不是在充电: 是=1, 否=0(进本函数前调用方已保证只可能是充或放) */
+    const Uint16 charging    = (RunState.workMode == (Uint16)WORK_MODE_CHARGE);
+    /* 电压通道要数满多少票: 充电→放电是固定 3 拍; 放电→充电是积分满额 500 分 */
+    const Uint16 u16VoltNeed = charging ? SM_N_VOLT_TO_DISCH : SM_VOLT_ACC_FULL;
+    /* 当前母线电压(两路 ADC 去工频干扰后的滤波值), 后面判断都用它 */
+    const float  vbus        = stADC.VmBusVolt.f32Notch;
+    /* 两路母线电流相加 = 实际总电流(系统约定: 放电为正, 充电为负) */
+    const float  iAct        = stADC.BusCurr1.f32IsrResult + stADC.BusCurr2.f32IsrResult;
+    float        iRef;   /* 电流给定, 下面从 Bus.f32Ref 取 */
 
-    if (charging ? ((vbus < (RampTarget.v - SM_V_MODE_BAND)) && (iAct > -SM_EPS_CURR))
-                 : ((vbus > (RampTarget.v + SM_V_MODE_BAND)) && (iAct < SM_EPS_CURR)))
+    /* ===== ① 电压通道: 看母线电压偏离设定值多少 ===== */
+    if (charging != 0U)
     {
-        if (RunState.voltDebounce < SM_N_VOLT_DEBOUNCE)
+        /* ---- 当前充电: 母线往下掉, 跌破"设定值 - 20V"就开始数票 ---- */
+        if (vbus < (RampTarget.v - SM_V_MODE_BAND))
         {
-            RunState.voltDebounce++;
+            /* 破线了: 票还没数满(3 拍)就再加一拍 */
+            if (RunState.voltDebounce < SM_N_VOLT_TO_DISCH)
+            {
+                RunState.voltDebounce++;
+            }
+        }
+        else
+        {
+            /* 电压回到正常带内: 之前的票全部作废, 从头数 */
+            RunState.voltDebounce = 0U;
         }
     }
     else
     {
-        RunState.voltDebounce = 0U;
+        /* ---- 当前放电: 母线往上冲才考虑换充电, 且要求基本没有电流 ---- */
+        /* 电压比设定值高多少(正=偏高, 负=偏低) */
+        const float f32Dv = vbus - RampTarget.v;
+
+        /* 两个条件同时成立才数票: 电压高出设定+10V, 且基本没有放电电流(<0.5A) */
+        if ((f32Dv > SM_V_MODE_BAND_LO) && (iAct < SM_EPS_CURR))
+        {
+            /* 压差越大每拍加票越多: 基础 10 分 + 每多 1V 再加 4 分 */
+            float  f32Step = SM_VOLT_ACC_STEP_MIN + SM_VOLT_ACC_SLOPE * (f32Dv - SM_V_MODE_BAND_LO);
+            Uint16 u16Step;   /* 本拍票数取整后 */
+
+            /* 单拍最多给 100 分, 防止压差很大时一拍就跳满(也给毛刺留余地) */
+            if (f32Step > SM_VOLT_ACC_STEP_MAX)
+            {
+                f32Step = SM_VOLT_ACC_STEP_MAX;
+            }
+            /* 浮点数转成整数, 作为本拍要累加的票数 */
+            u16Step = (Uint16)f32Step;
+
+            /* 还没满额(500 分)才继续累加 */
+            if (RunState.voltDebounce < SM_VOLT_ACC_FULL)
+            {
+                /* 先算累加后的票数 */
+                Uint16 u16NextAcc = RunState.voltDebounce + u16Step;
+                /* 超过 500 就按 500 封顶(饱和累加, 不会溢出) */
+                RunState.voltDebounce = (u16NextAcc >= SM_VOLT_ACC_FULL) ? SM_VOLT_ACC_FULL : u16NextAcc;
+            }
+        }
+        else
+        {
+            /* 电压没高够 10V, 或者还有明显电流: 说明母线冲高只是卸载暂态, 清票重来 */
+            RunState.voltDebounce = 0U;
+        }
     }
 
+    /* ===== ② 电流给定通道: 外环要求反向, 且本向实际电流已退出 ===== */
+    /* 取外环下发的电流给定(系统约定: 正=放电需求, 负=充电需求) */
     iRef = Bus.f32Ref;
-    if (charging ? (iRef > SM_EPS_CURR) : (iRef < -SM_EPS_CURR))
+
+    /* 按本向电流符号加冗余: 充电 iAct>-0.5A / 放电 iAct<0.5A 才允许反向给定计票 */
+    if (charging ? ((iRef > SM_EPS_CURR) && (iAct > -SM_EPS_CURR))
+                 : ((iRef < -SM_EPS_CURR) && (iAct < SM_EPS_CURR)))
     {
-        if (RunState.irefDebounce < SM_N_IREF_DEBOUNCE)
+        /* 条件成立: 票没数满就再加一拍 */
+        if (RunState.irefDebounce < SM_N_IREF_SWITCH)
         {
             RunState.irefDebounce++;
         }
     }
     else
     {
+        /* 给定未反向或本向电流未退出: 清票重来 */
         RunState.irefDebounce = 0U;
     }
+
+    /* ===== 汇总: 电压票数满 或 电流给定票数满, 就返回 1(该换向了) ===== */
+    return ((RunState.voltDebounce >= u16VoltNeed) ||
+            (RunState.irefDebounce >= SM_N_IREF_SWITCH)) ? 1U : 0U;
 }
 
 /**
@@ -421,9 +474,7 @@ void SM_Standby_100us(void)
             return;
         }
 
-        SM_ModeArbitrate_100us();
-        if ((RunState.voltDebounce < SM_N_VOLT_DEBOUNCE) &&
-            (RunState.irefDebounce < SM_N_IREF_DEBOUNCE))
+        if (SM_ModeArbitrate_100us() == 0U)
         {
             return;
         }
