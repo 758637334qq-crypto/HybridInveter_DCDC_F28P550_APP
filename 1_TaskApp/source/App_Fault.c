@@ -112,9 +112,9 @@ static inline Uint16 Fault_ImbHit(float i0, float i1)
  *        依赖 C28x 对 16 位全局字的 OR/AND 单指令原子读改写与 5ms 恢复共享 stFault.fast。
  */
 #pragma CODE_SECTION(Fault_FastProtect, ".TI.ramfunc");
-void Fault_FastProtect(float f32BusCurr0, float f32BusCurr1)
+void Fault_FastProtect(float f32BusCurr0, float f32BusCurr1,float f32Vbus)
 {
-    float f32Vbus = stADC.VmBusVolt.f32IsrResult;
+//    float f32Vbus = stADC.VmBusVolt.f32IsrResult;
 
     if (Fault_Confirm(&stFaultCnt.run.fastOvHit,
                       (Uint16)(f32Vbus > FAULT_FAST_OV),

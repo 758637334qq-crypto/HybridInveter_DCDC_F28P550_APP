@@ -19,7 +19,6 @@
  *============================================================================*/
 #define DAB_VOLT_MIN            (360.0f)   /* 电压下限(V)，再低会倒灌 */
 #define DAB_VOLT_MAX            (450.0f)   /* 电压上限(V) */
-#define DAB_CURR_LIMIT          (20.0f)    /* 电流限值绝对值上限(A) */
 #define DAB_VOLT_RAMP_STEP      (1.0f)     /* 常态电压步长：1V/ms */
 #define DAB_VOLT_FAST_EXIT      (4.0f)     /* 换向快爬退出偏差(V) */
 #define DAB_CURR_RAMP_STEP      (2.0f)     /* 电流限值放宽步长：2A/ms */
@@ -286,9 +285,9 @@ void Ctrl_StandbyClear(void)
     CurShare_ResetComp();
 }
 
-/* 封波关中断窗口内装载工况：内环系数/占空比上限/u16IsCharge，并清两路 PI 与 Duty。
+/* 封波关中断窗口内装载工况：内环系数、PI 占空比上限、u16IsCharge，并清两路 PI 与 Duty。
  * 出 STANDBY / 冷启共用此环清零点；Bus 动态量与 Ramp 由随后 RampInit*（含 sBusSeed）覆盖。
- * 充电 K1/K2 置 0，ISR 用专用系数；放电 K1=Kp+Ki·Ts，K2=Kp，输出上限 1。
+ * 充电 K1/K2 置 0，ISR 用专用系数，PI 上限 DAB_CHG_D_LOW_MAX；放电 K1=Kp+Ki·Ts，K2=Kp，上限 1。
  * 非充电入参一律按放电装，避免残留上一档参数。
  * 误差低通用固定宏 DAB_BUS_ALPHA，不再按载波装载。 */
 void Ctrl_SetMode(Uint16 workMode)
@@ -309,8 +308,6 @@ void Ctrl_SetMode(Uint16 workMode)
         f32DutyMax = 1.0f;
         stDabParam.u16IsCharge = 0U;
     }
-
-    stDabParam.f32DutyMax = f32DutyMax;
 
     sPiInit(&stDabPi0, f32Kp + f32KiTs, f32Kp, f32DutyMax);
     sPiInit(&stDabPi1, f32Kp + f32KiTs, f32Kp, f32DutyMax);

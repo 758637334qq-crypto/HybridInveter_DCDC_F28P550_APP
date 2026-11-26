@@ -139,12 +139,30 @@ static inline void Dab_Ctrl_BusVoltLoop(float f32Vo, float f32RefMin, Uint16 u16
         const float f32Err = DAB_SAT(f32ErrRaw, -40.0f, 40.0f); // 误差硬限幅防溢出 [-40V, +40V]
         const float f32ErrAbs = fabsf(f32Err);
 
-        /* 3.1 变增益系数插值: 根据误差大小线性过渡参数 T ∈ [0, 1] */
+        /* 3.1 Kp 两段折线：3~6V→0.015~0.03，6~12V→0.03~0.18；Ki 仍用 3~9V 单段 T */
+        float f32Kp;
+        if (f32ErrAbs <= DAB_BUS_KP_E0)
+        {
+            f32Kp = DAB_BUS_KP_0;
+        }
+        else if (f32ErrAbs <= DAB_BUS_KP_E1)
+        {
+            f32Kp = DAB_BUS_KP_0
+                    + (DAB_BUS_KP_1 - DAB_BUS_KP_0) * (f32ErrAbs - DAB_BUS_KP_E0) * DAB_BUS_KP_INV_SPAN01;
+        }
+        else if (f32ErrAbs <= DAB_BUS_KP_E2)
+        {
+            f32Kp = DAB_BUS_KP_1
+                    + (DAB_BUS_KP_2 - DAB_BUS_KP_1) * (f32ErrAbs - DAB_BUS_KP_E1) * DAB_BUS_KP_INV_SPAN12;
+        }
+        else
+        {
+            f32Kp = DAB_BUS_KP_2;
+        }
+
         const float f32T = DAB_SAT((f32ErrAbs - DAB_BUS_GAIN_E_LO) * DAB_BUS_GAIN_INV_SPAN, 0.0f, 1.0f);
-        
-        /* 3.2 动态比例与积分增益: 小误差低增益抗噪，大误差高增益提速 */
-        const float f32Prop = (DAB_BUS_KP_LO + DAB_BUS_KP_SPAN * f32T) * f32ErrRaw; // 比例输出 P
-        float f32Ki = DAB_BUS_KI_LO + DAB_BUS_KI_SPAN * f32T;                       // 动态 Ki
+        const float f32Prop = f32Kp * f32ErrRaw;
+        float f32Ki = DAB_BUS_KI_LO + DAB_BUS_KI_SPAN * f32T;
         float f32Integ = Bus.f32Integ;                                              // 上一拍积分量 I
         const float f32Cmd = f32Integ + f32Prop;                                    // 当前期望未限幅指令
 
@@ -204,85 +222,87 @@ static inline void Dab_Ctrl_BusVoltLoop(float f32Vo, float f32RefMin, Uint16 u16
  * ② 放电内环
  *============================================================================*/
 
-/* ▲ 放电模型前馈：按单桥目标电流 f32Iref 反解归一化占空比 u ∈ [0,1]
- *   1) 算归一化电流 j = K·Iref / (n·Vbat)；
- *   2) 升压区 (r ≥ 1)：低压锁 0.44，轻载用精确开方、重载用切线求高压交叠量 q；
- *   3) 降压区 (r < 1)：轻载开方求低压脉宽 b（受 bmax 限幅）并反查 u，末尾 2% 平滑桥接，
- *      超过 j0 后再按线性叠加高压交叠量 q；
- *   4) q 在物理最大功率点封顶，再反算回 u（与 Dab_Ctrl_DisDutyMap 互逆）。 */
+/* 放电模型前馈：按单桥母线电流给定反算 u，与 Dab_Ctrl_DisDutyMap 配套。 */
 #pragma FUNC_ALWAYS_INLINE(Dab_Ctrl_DisFfCalc);
 static inline float Dab_Ctrl_DisFfCalc(float f32Iref)
 {
-    float f32InvE = g_stDabIsrState.f32DisInvE;
-    float f32R    = g_stDabIsrState.f32DisRatio;
-    float f32J;
-    float f32Q;
-    float f32U;
+    const float f32InvE = g_stDabIsrState.f32DisInvE;
+    const float f32R    = g_stDabIsrState.f32DisRatio;
 
-    /* 电池欠压或给定极小时直接输出 0 */
-    if ((f32InvE <= 0.0f) || (f32Iref < DAB_DIS_FF_IREF_MIN))
+    if (!(f32InvE > 0.0f && f32Iref > DAB_DIS_FF_IREF_MIN))
     {
         return 0.0f;
     }
 
-    f32J = DAB_DIS_FF_K * f32Iref * f32InvE;
+    /* 单桥给定从 0.05 A 到 0.25 A 时，前馈上限从 0 放宽到 1。 */
+    const float f32FfMax   = __fmin(1.0f, (f32Iref - DAB_DIS_FF_IREF_MIN) * DAB_DIS_FF_START_SPAN_INV);
+    const float f32JPerAmp = DAB_DIS_FF_K * f32InvE;
+    const float f32J       = f32Iref * f32JPerAmp;
+    float f32U = DAB_DIS_FF_U_Q0;
+    float f32Q;
 
     if (f32R >= 1.0f)
     {
-        /* ▲ 升压区：Vset ≥ n·Vbat */
-        float f32Dr = f32R - 1.0f;
-        float f32J1 = __divf32(DAB_DIS_FF_B2 * f32Dr, f32R * f32R);
+        /* 升压区：轻载开方，重载按分界点切线计算。 */
+        const float f32Dr = f32R - 1.0f;
+        const float f32J1 = __divf32(DAB_DIS_FF_B2 * f32Dr, f32R * f32R);
 
         if (f32J <= f32J1)
         {
-            f32Q = __sqrt(f32J * f32Dr);                                                    /* 轻中载 DCM：精确开方 */
+            f32Q = __sqrt(f32J * f32Dr);
         }
         else
         {
-            f32Q = __divf32(DAB_DIS_FF_B * f32Dr, 2.0f * f32R) + f32R * f32J * DAB_DIS_FF_INV_2B; /* 重载：一阶切线 */
+            f32Q = __divf32(DAB_DIS_FF_B * f32Dr, 2.0f * f32R) + f32R * f32J * DAB_DIS_FF_INV_2B;
         }
     }
     else
     {
-        /* ▲ 降压区：Vset < n·Vbat */
-        float f32J0 = __divf32(2.0f * (1.0f - f32R) * DAB_DIS_FF_B2, 1.0f + f32R);
+        const float f32J0 = __divf32(2.0f * (1.0f - f32R) * DAB_DIS_FF_B2, 1.0f + f32R);
 
-        if (f32J <= f32J0)
+        if (f32J < (1.0f + DAB_DIS_FF_BLEND_WIDTH) * f32J0)
         {
-            float f32K    = __divf32(f32J, f32J0);                                  /* 当前电流占 j0 的比例 (0~1] */
-            float f32BMax = __fmin(DAB_DIS_FF_B, 0.25f * (1.0f + f32R) - 0.025f);   /* ▲ 保留原模型随电压比收紧的 bmax */
-            float f32B    = __fmin(DAB_DIS_FF_B * __sqrt(f32K), f32BMax);
-            float f32T    = __fmax((f32K - 0.98f) * 50.0f, 0.0f);                   /* ▲ 仅末尾 2% 线性桥接到 u_q0，消除跳变 */
+            const float f32BMax = __fmin(DAB_DIS_FF_B, 0.25f * (1.0f + f32R) - 0.025f);
+            float f32B = f32BMax;
 
-            f32U = (f32B <= 0.30f) ? ((f32B - DAB_DUTY_LV_MIN) * DAB_LV_INV_SLOPE1)
-                                   : (DAB_U_MID1 + (f32B - 0.30f) * DAB_LV_INV_SLOPE2);
-            f32U += f32T * (DAB_DIS_FF_U_Q0 - f32U);
-            return DAB_SAT(f32U, 0.0f, 1.0f);
+            if (f32J < f32J0)
+            {
+                const float f32K = __divf32(f32J, f32J0);
+                f32B = __fmin(DAB_DIS_FF_B * __sqrt(f32K), f32BMax);
+            }
+            f32U = (f32B - DAB_DUTY_LV_MIN) * DAB_LV_INV_SLOPE;
+            if (f32J <= f32J0)
+            {
+                return DAB_SAT(f32U, 0.0f, f32FfMax);
+            }
+
+            /* J0 后用三次权重接回移相段，接近单桥额定给定时按余量缩短过渡。 */
+            const float f32Room = DAB_CURR_LIMIT * DAB_CURR_PER_BRIDGE * f32JPerAmp - f32J0;
+            const float f32Width = __fmin(DAB_DIS_FF_BLEND_WIDTH * f32J0,
+                                         __fmax(DAB_DIS_FF_HI_MIN_A * f32JPerAmp, f32Room));
+            const float f32T = __fmin(1.0f, __divf32(f32J - f32J0, f32Width));
+            const float f32Weight = f32T * f32T * (3.0f - 2.0f * f32T);
+            f32U += f32Weight * (DAB_DIS_FF_U_Q0 - f32U);
         }
 
         f32Q = __divf32((1.0f + f32R) * (f32J - f32J0), 4.0f * f32R * DAB_DIS_FF_B);
     }
 
-    /* ▲ 限制 q 不越过最大功率点，再反算回 u */
+    /* 移相量按最大功率点限幅，再叠加到 u。 */
     f32Q = __fmin(f32Q, __divf32(2.0f * f32R * DAB_DIS_FF_B, 1.0f + 2.0f * f32R));
-    f32U = DAB_DIS_FF_U_Q0 + f32Q * DAB_HV_INV_SLOPE;
-
-    return DAB_SAT(f32U, 0.0f, 1.0f);
+    f32U += f32Q * DAB_HV_INV_SLOPE;
+    return DAB_SAT(f32U, 0.0f, f32FfMax);
 }
 
 /* 按上拍映射输入 u 选增益调度倍率，分段边界与 Dab_Ctrl_DisDutyMap 一致 */
 #pragma FUNC_ALWAYS_INLINE(Dab_Ctrl_DisGainSched);
 static inline float Dab_Ctrl_DisGainSched(float f32DutyU)
 {
-    if (f32DutyU <= DAB_U_MID1)
-    {
-        return DAB_SCHED_S5_SCALE_1;
-    }
     if (f32DutyU <= DAB_U_MID2)
     {
-        return DAB_SCHED_S5_SCALE_2;
+        return DAB_SCHED_S5_SCALE;   /* LV 段 */
     }
-    return DAB_SCHED_S4_SCALE_3;
+    return DAB_SCHED_S4_SCALE;       /* HV 段 */
 }
 
 /* 放电单路电流环
@@ -374,19 +394,14 @@ static inline void Dab_Ctrl_DisDutyMap(float f32Duty, float *pf32HvDuty, float *
 
     if (f32Duty <= DAB_U_MID2)
     {
-        f32HvDutyTmp = DAB_DUTY_HV_BASE;                    /* HV 固定 45% */
-        if (f32Duty <= DAB_U_MID1)
-        {
-            f32LvDutyTmp = DAB_DUTY_LV_MIN + DAB_LV_SLOPE1 * f32Duty;
-        }
-        else
-        {
-            f32LvDutyTmp = 0.30f + DAB_LV_SLOPE2 * (f32Duty - DAB_U_MID1);
-        }
+        /* 0.03~0.50：HV 固定 45%，LV = 10% + 0.68·u */
+        f32HvDutyTmp = DAB_DUTY_HV_BASE;
+        f32LvDutyTmp = DAB_DUTY_LV_MIN + DAB_LV_SLOPE * f32Duty;
     }
     else
     {
-        f32LvDutyTmp = DAB_DUTY_LV_MAX;                     /* LV 到顶，HV 开始加 */
+        /* >0.50：LV 锁 44%，HV = 45% + 0.45·(u-0.50) */
+        f32LvDutyTmp = DAB_DUTY_LV_MAX;
         f32HvDutyTmp = DAB_DUTY_HV_BASE + DAB_HV_SLOPE * (f32Duty - DAB_U_MID2);
     }
 
@@ -600,7 +615,7 @@ static inline void Dab_Ctrl_Loop(Uint16 u16IsCharge, Uint16 u16HoldOff)
         f32Dv = f32Vslow - f32E;
 
         /* 用较高的母线电压核算 ZCS 和峰值电流上限。 */
-        f32DutyMax = __fmin(stDabParam.f32DutyMax,
+        f32DutyMax = __fmin(DAB_CHG_D_LOW_MAX,
                             __fmin(__divf32(DAB_CHARGE_ZCS_MAX * f32E, f32VbusPk),
                                    __divf32(DAB_CHARGE_IPK_MAX * DAB_CHARGE_KFL_MIN,
                                             __fmax(f32VbusPk - f32E, 1.0f))));
@@ -1093,7 +1108,8 @@ interrupt void EPWM10_ISR(void)
     stADC.BatCurr.f32IsrResult    = (f32I0 + f32I1) * f32Vbus * g_stDabIsrState.f32InvBatVolt;
 
     /* ① 快保护：只判断置位（母线过压取 max(VBUS1, VBUS2)） */
-    Fault_FastProtect(f32I0, f32I1);
+    Fault_FastProtect(f32I0, f32I1,
+                      __fmax(stADC.BusVolt1.f32IsrResult, stADC.BusVolt2.f32IsrResult));
 
     /* 加热膜 1kHz 软 PWM（仅翻转） */
     HeatFilm_Isr(u16IsCharge);

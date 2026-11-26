@@ -34,27 +34,23 @@
  * 三、放电开环分段映射（u ∈ [0,1] → HV / LV 占空比）
  *
  *   u < 0.03         零指令，不发波
- *   0.03 ≤ u ≤ 0.30  HV 固定 45%，LV = 10% + 0.667·u
- *   0.30 < u ≤ 0.50  HV 固定 45%，LV = 30% + 0.70·(u-0.30)
- *   0.50 < u ≤ 1.00  LV 锁 44%，  HV = 45% + slope·(u-0.50)
+ *   0.03 ≤ u ≤ 0.50  HV 固定 45%，LV = 10% + 0.68·u
+ *   0.50 < u ≤ 1.00  LV 固定 44%，HV = 45% + 0.45·(u-0.50)
  *
- * 先开 LV（增大移相角），LV 到顶后再动 HV，功率从零平滑上升，避免冲击电流。
+ * 先加宽 LV 脉冲，LV 到顶后再调 HV。两段在 u=0.50 接到同一组 PWM 指令。
  *============================================================================*/
 #define DAB_U_MIN_PACKET    (0.03f)   /* 打嗝门限：低于 3% 视为零指令（刻意无迟滞） */
 #define DAB_DUTY_LV_MIN     (0.10f)   /* 再小脉宽驱动不了 */
 #define DAB_DUTY_LV_MAX     (0.44f)   /* 接近 50% 就直通 */
 #define DAB_DUTY_HV_BASE    (0.45f)   /* 略小于 50%，留死区 */
-#define DAB_U_MID1          (0.30f)
 #define DAB_U_MID2          (0.50f)
-#define DAB_LV_SLOPE1       (0.66667f)
-#define DAB_LV_SLOPE2       (0.70f)
+#define DAB_LV_SLOPE        ((DAB_DUTY_LV_MAX - DAB_DUTY_LV_MIN) / DAB_U_MID2)
 #define DAB_HV_SLOPE        (DAB_DISCHARGE_HV_SLOPE)
 
-/* 增益调度：环路增益与映射斜率成正比。以第二段斜率为基准，用“基准/当前”
- * 反向放大 PI 增量；倍率与斜率在同一分段边界切换，乘积恒为 DAB_LV_SLOPE2。 */
-#define DAB_SCHED_S5_SCALE_1  (DAB_LV_SLOPE2 / DAB_LV_SLOPE1)  /* 段① 只动 S5 */
-#define DAB_SCHED_S5_SCALE_2  (1.0f)                            /* 段② 基准 */
-#define DAB_SCHED_S4_SCALE_3  (DAB_LV_SLOPE2 / DAB_HV_SLOPE)    /* 段③ 只动 S4 */
+/* 增益调度：沿用 0.70 的 PI 斜率基准，按两段各自的 PWM 映射斜率换算倍率。 */
+#define DAB_SCHED_REF_SLOPE (0.70f)
+#define DAB_SCHED_S5_SCALE  (DAB_SCHED_REF_SLOPE / DAB_LV_SLOPE)
+#define DAB_SCHED_S4_SCALE  (DAB_SCHED_REF_SLOPE / DAB_HV_SLOPE)
 
 /*==============================================================================
  * ▲ 四、放电模型前馈参数（按单桥电流反解归一化占空比 u）
@@ -66,9 +62,12 @@
 #define DAB_DIS_FF_B2           (DAB_DIS_FF_B * DAB_DIS_FF_B)     /* B^2，编译期常量 */
 #define DAB_DIS_FF_INV_2B       (1.0f / (2.0f * DAB_DIS_FF_B))    /* 1/(2B)，避免 ISR 除法 */
 #define DAB_DIS_FF_IREF_MIN     (0.05f)                           /* 单桥给定低于此值关前馈(A) */
-#define DAB_LV_INV_SLOPE1       (1.0f / DAB_LV_SLOPE1)            /* 映射段①斜率倒数 */
-#define DAB_LV_INV_SLOPE2       (1.0f / DAB_LV_SLOPE2)            /* 映射段②斜率倒数 */
-#define DAB_HV_INV_SLOPE        (1.0f / DAB_HV_SLOPE)             /* 映射段③斜率倒数 */
+#define DAB_DIS_FF_START_SPAN_A (0.20f)                           /* 单桥越过门槛后，前馈上限在这段电流内从 0 升到 1 */
+#define DAB_DIS_FF_START_SPAN_INV (1.0f / DAB_DIS_FF_START_SPAN_A) /* =5，热路径用乘逆代替每拍除法 */
+#define DAB_DIS_FF_BLEND_WIDTH  (0.20f)                           /* 降压过渡的常规宽度，占分界电流的比例 */
+#define DAB_DIS_FF_HI_MIN_A     (0.40f)                           /* 高负载按额定电流余量缩短过渡时的最小宽度(A/桥) */
+#define DAB_LV_INV_SLOPE        (1.0f / DAB_LV_SLOPE)             /* LV 映射斜率倒数 */
+#define DAB_HV_INV_SLOPE        (1.0f / DAB_HV_SLOPE)             /* HV 映射斜率倒数 */
 #define DAB_DIS_FF_U_Q0         (DAB_U_MID2 + (0.50f - DAB_DUTY_HV_BASE) * DAB_HV_INV_SLOPE) /* 高压刚好 50%(q=0) 对应的 u */
 
 /*==============================================================================

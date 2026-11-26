@@ -165,6 +165,6 @@ void Fault_ClearRelay(void);
 void Fault_SetSoftTo(void);
 void Fault_ClearSoftTo(void);
 Uint16 Fault_PreStartHwOk(void);
-void Fault_FastProtect(float f32BusCurr0, float f32BusCurr1);
+void Fault_FastProtect(float f32BusCurr0, float f32BusCurr1, float f32Vbus);
 
 #endif /* APP_FAULT_H */

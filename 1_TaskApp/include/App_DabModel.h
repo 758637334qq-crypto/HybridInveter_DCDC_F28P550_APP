@@ -54,12 +54,23 @@
 #define DAB_CHARGE_I_KEEP_MIN   (0.02f)
 
 /* DAB_Bus_Expert_v111_xs根层C-Script及本次粘贴代码的电压环参数。
- * Ki为每个10kHz外环拍的系数，不再重复乘采样周期。 */
-#define DAB_BUS_GAIN_E_LO (3.0f)
-#define DAB_BUS_GAIN_E_HI (9.0f)
-/* 增益调度区间倒数, 编译期常量, 避免每拍做除法 */
+ * Ki为每个10kHz外环拍的系数，不再重复乘采样周期。
+ *
+ * Kp 两段折线（|e|，与仿真对齐）：
+ *   ≤3V → 0.015；3~6V → 0.015~0.03；6~12V → 0.03~0.18；≥12V → 0.18
+ * Ki 仍用单段 3~9V 调度，与 Kp 解耦。 */
+#define DAB_BUS_KP_E0           (3.0f)
+#define DAB_BUS_KP_E1           (6.0f)
+#define DAB_BUS_KP_E2           (12.0f)
+#define DAB_BUS_KP_0            (0.015f)
+#define DAB_BUS_KP_1            (0.03f)
+#define DAB_BUS_KP_2            (0.18f)
+#define DAB_BUS_KP_INV_SPAN01   (1.0f / (DAB_BUS_KP_E1 - DAB_BUS_KP_E0))
+#define DAB_BUS_KP_INV_SPAN12   (1.0f / (DAB_BUS_KP_E2 - DAB_BUS_KP_E1))
+
+#define DAB_BUS_GAIN_E_LO (3.0f)   /* Ki 调度起点 */
+#define DAB_BUS_GAIN_E_HI (9.0f)   /* Ki 调度终点 */
 #define DAB_BUS_GAIN_INV_SPAN   (1.0f / (DAB_BUS_GAIN_E_HI - DAB_BUS_GAIN_E_LO))
-#define DAB_BUS_KP_SPAN         (DAB_BUS_KP_HI - DAB_BUS_KP_LO)                  /* Kp 跨度 */
 #define DAB_BUS_KI_SPAN         (DAB_BUS_KI_HI - DAB_BUS_KI_LO)                  /* Ki 跨度(为负) */
 
 #define BUS_CHG_OUT_MAX         ( 1.0f)     /* 充电: PI 校正量上限(A) */
@@ -80,14 +91,14 @@
 #define DAB_BUS_T_LEAD          (0.001f)    /* 预测提前量 1ms（≈误差滤波+内环迟滞） */
 #define DAB_BUS_OUT_SLEW_A      (1.5f)      /* 加载向单拍 |Δ(I+Kp·e)| 上限 @10kHz ≈15A/ms（退流不限，不回写积分） */
 
-#define DAB_BUS_KP_LO     (0.02f)
-#define DAB_BUS_KP_HI     (0.2f)
+#define DAB_BUS_KP_LO     (DAB_BUS_KP_0)   /* 兼容：最小 Kp */
+#define DAB_BUS_KP_HI     (DAB_BUS_KP_2)   /* 兼容：最大 Kp（KI_FAST / 打嗝迟滞） */
 
 #define DAB_BUS_KI_LO     (0.0006f)
 #define DAB_BUS_KI_HI     (0.0002f)
 /* 轻载打嗝迟滞幅值（充放电统一，判决方向随工况镜像，见 Interrupt_CtrlDab.c）。
  * A = 最大外环 Kp × 封波期允许电压漂移，定值方法：ΔV允许 ≈ A / Kp；
- * 取 Kp=KP_HI(0.20A/V)、ΔV允许=1.0V → A=0.20A。公式只给工程初值，
+ * 取 Kp=KP_HI(0.18A/V)、ΔV允许=1.0V → A=0.18A。公式只给工程初值，
  * 增量 PI、积分项也影响实际漂移，改 KP_HI/ΔV 后须回归
  * 打嗝频率与封波期电压波动实测。 */
 #define DAB_BUS_VDRIFT_ALLOW_V      (1.0f)

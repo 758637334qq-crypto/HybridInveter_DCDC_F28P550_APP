@@ -1,10 +1,10 @@
 ******************************************************************************
              TMS320C2000 Linker PC v22.6.1                     
 ******************************************************************************
->> Linked Tue Nov 24 09:47:34 2026
+>> Linked Thu Nov 26 14:56:40 2026
 
 OUTPUT FILE NAME:   <F28P55x_APP.out>
-ENTRY POINT SYMBOL: "_c_int00"  address: 0008925d
+ENTRY POINT SYMBOL: "_c_int00"  address: 0008926c
 
 
 MEMORY CONFIGURATION
@@ -23,8 +23,8 @@ PAGE 0:
   RAMLS01               00008000   00001000  00000000  00001000  RWIX
   RAMLS2                00009000   00000800  00000000  00000800  RWIX
   RAMLS3                00009800   00000800  00000000  00000800  RWIX
-  RAMLS4567             0000a000   00002000  0000134c  00000cb4  RWIX
-  RAMGS0                0000c000   00002000  00001209  00000df7  RWIX
+  RAMLS4567             0000a000   00002000  00000f32  000010ce  RWIX
+  RAMGS0                0000c000   00002000  000011f7  00000e09  RWIX
   RAMGS1                0000e000   00002000  00000000  00002000  RWIX
   RAMGS2                00010000   00002000  00000000  00002000  RWIX
   RAMGS3                00012000   00002000  00000000  00002000  RWIX
@@ -33,7 +33,7 @@ PAGE 0:
   FLASH_BOOT            00080020   00003fe0  00000000  00003fe0  RWIX
   FLASHSTART            00084000   00000008  00000000  00000008  RWIX
   FLASH_APPINFO         00084008   00000020  0000000b  00000015  RWIX
-  FLASHAPP              00084028   0001bfd0  00006671  0001595f  RWIX
+  FLASHAPP              00084028   0001bfd0  00006266  00015d6a  RWIX
   FLASHEND              0009fff8   00000008  00000000  00000008  RWIX
   FLASH_BANK1           000a0000   00020000  00000000  00020000  RWIX
   FLASH_BANK2           000c0000   00020000  00000000  00020000  RWIX
@@ -184,101 +184,101 @@ codestart
 
 Cla1Prog   0    00004000    00000000     UNINITIALIZED
 
-.data      0    0000d178    00000091     UNINITIALIZED
-                  0000d178    00000020     mcan.obj (.data:dataSize)
-                  0000d198    0000001e     TaskOS.obj (.data:taskBoxTable)
-                  0000d1b6    00000010     mcan.obj (.data:objSize)
-                  0000d1c6    0000000e     Interrupt_CtrlDab.obj (.data)
-                  0000d1d4    0000000a     TaskOS.obj (.data:u32TaskRunTimeMaxUs)
-                  0000d1de    0000000a     TaskOS.obj (.data:u32TaskRunTimeUs)
-                  0000d1e8    00000008     TaskSched.obj (.data)
-                  0000d1f0    00000006     App_AdcDataDeal.obj (.data)
-                  0000d1f6    00000006     rts2800_fpu32_eabi.lib : exit.c.obj (.data)
-                  0000d1fc    00000004     TaskOS.obj (.data)
-                  0000d200    00000002     ConfigChip_McanInit.obj (.data)
-                  0000d202    00000002     ConfigChip_SpiInit.obj (.data)
-                  0000d204    00000002     rts2800_fpu32_eabi.lib : _lock.c.obj (.data:_lock)
-                  0000d206    00000002                            : _lock.c.obj (.data:_unlock)
-                  0000d208    00000001     ConfigChip_EpwmInit.obj (.data)
+.data      0    0000d164    00000093     UNINITIALIZED
+                  0000d164    00000020     mcan.obj (.data:dataSize)
+                  0000d184    0000001e     TaskOS.obj (.data:taskBoxTable)
+                  0000d1a2    00000010     Interrupt_CtrlDab.obj (.data)
+                  0000d1b2    00000010     mcan.obj (.data:objSize)
+                  0000d1c2    0000000a     TaskOS.obj (.data:u32TaskRunTimeMaxUs)
+                  0000d1cc    0000000a     TaskOS.obj (.data:u32TaskRunTimeUs)
+                  0000d1d6    00000008     TaskSched.obj (.data)
+                  0000d1de    00000006     App_AdcDataDeal.obj (.data)
+                  0000d1e4    00000006     rts2800_fpu32_eabi.lib : exit.c.obj (.data)
+                  0000d1ea    00000004     TaskOS.obj (.data)
+                  0000d1ee    00000002     ConfigChip_McanInit.obj (.data)
+                  0000d1f0    00000002     ConfigChip_SpiInit.obj (.data)
+                  0000d1f2    00000002     rts2800_fpu32_eabi.lib : _lock.c.obj (.data:_lock)
+                  0000d1f4    00000002                            : _lock.c.obj (.data:_unlock)
+                  0000d1f6    00000001     ConfigChip_EpwmInit.obj (.data)
 
 Flash_AppInfo 
 *          0    00084008    0000000b     
                   00084008    0000000b     main.obj (Flash_AppInfo:retain)
 
-.text      0    000844b0    00004e35     
+.text      0    000844b0    00004e44     
                   000844b0    00000eb5     mcan.obj (.text)
                   00085365    0000053f     f28p55x_defaultisr.obj (.text:retain)
                   000858a4    0000048e     ConfigChip_EpwmInit.obj (.text)
                   00085d32    00000366     App_Fault.obj (.text)
-                  00086098    0000032e     App_StateMachine.obj (.text)
-                  000863c6    00000327     f28p55x_sysctrl.obj (.text)
-                  000866ed    0000030f     App_CtrlData.obj (.text)
-                  000869fc    000002f5     App_CurShare.obj (.text)
-                  00086cf1    000002f5     App_UartProto.obj (.text)
-                  00086fe6    000002d1     App_DataCalc.obj (.text)
-                  000872b7    000002cd     ConfigChip_McanInit.obj (.text)
-                  00087584    0000029f     ConfigChip_CmpssInit.obj (.text)
-                  00087823    00000272     App_AdcDataDeal.obj (.text)
-                  00087a95    00000250     App_CanComm.obj (.text)
-                  00087ce5    0000024d     TaskSched.obj (.text)
-                  00087f32    0000021f     ConfigChip_AdcInit.obj (.text)
-                  00088151    0000021d     gpio.obj (.text)
-                  0008836e    0000020b     ConfigChip_BoardCfg.obj (.text)
-                  00088579    000001b0     f28p55x_gpio.obj (.text)
-                  00088729    0000015f     adc.obj (.text)
-                  00088888    0000014f     interrupt.obj (.text)
-                  000889d7    0000013f     TaskOS.obj (.text)
-                  00088b16    000000c5     ConfigChip_CustomUart.obj (.text)
-                  00088bdb    000000ab     Interrupt_Notch2f.obj (.text)
-                  00088c86    00000099     ConfigChip_SysCtrlInit.obj (.text)
-                  00088d1f    00000099     main.obj (.text)
-                  00088db8    00000093     App_BootProto.obj (.text)
-                  00088e4b    00000067     f28p55x_cputimers.obj (.text)
-                  00088eb2    00000064     App_Gpio.obj (.text)
-                  00088f16    00000061     App_HeatFilm.obj (.text)
-                  00088f77    00000061     ConfigChip_DabPwmMap.obj (.text)
-                  00088fd8    00000047     Interrupt_CtrlDab.obj (.text)
-                  0008901f    00000041     ConfigChip_DspInit.obj (.text)
-                  00089060    00000041     TaskOS.obj (.text:retain)
-                  000890a1    00000037     ConfigChip_SpiInit.obj (.text)
-                  000890d8    00000033     TaskSched.obj (.text:retain)
-                  0008910b    00000030     rts2800_fpu32_eabi.lib : copy_decompress_lzss.c.obj (.text:decompress:lzss)
-                  0008913b    0000002b                            : autoinit.c.obj (.text:__TI_auto_init_nobinit_nopinit)
-                  00089166    00000029     asysctl.obj (.text)
-                  0008918f    00000029     rts2800_fpu32_eabi.lib : exit.c.obj (.text)
-                  000891b8    00000028     f28p55x_piectrl.obj (.text)
-                  000891e0    00000028     globaldatadef.obj (.text)
-                  00089208    00000020     interrupt.obj (.text:retain)
-                  00089228    0000001d     rts2800_fpu32_eabi.lib : memcpy.c.obj (.text)
-                  00089245    00000018     Task_1ms.obj (.text)
-                  0008925d    00000017     rts2800_fpu32_eabi.lib : boot28.asm.obj (.text)
-                  00089274    00000013     f28p55x_pievect.obj (.text)
-                  00089287    00000010     Task_5ms.obj (.text)
-                  00089297    0000000c     rts2800_fpu32_eabi.lib : args_main.c.obj (.text)
-                  000892a3    0000000b                            : u_div28.asm.obj (.text)
-                  000892ae    00000009                            : _lock.c.obj (.text)
-                  000892b7    00000008     Task_100us.obj (.text)
-                  000892bf    00000008     rts2800_fpu32_eabi.lib : copy_decompress_none.c.obj (.text:decompress:none)
-                  000892c7    00000008     f28p55x_codestartbranch.obj (.text)
-                  000892cf    00000007     rts2800_fpu32_eabi.lib : memset.c.obj (.text)
-                  000892d6    00000006     cputimer.obj (.text)
-                  000892dc    00000006     rts2800_fpu32_eabi.lib : copy_zero_init.c.obj (.text:decompress:ZI)
-                  000892e2    00000002                            : pre_init.c.obj (.text)
-                  000892e4    00000001                            : startup.c.obj (.text)
+                  00086098    00000360     App_StateMachine.obj (.text)
+                  000863f8    00000327     f28p55x_sysctrl.obj (.text)
+                  0008671f    00000308     App_CtrlData.obj (.text)
+                  00086a27    000002f5     App_CurShare.obj (.text)
+                  00086d1c    000002f5     App_UartProto.obj (.text)
+                  00087011    000002cd     ConfigChip_McanInit.obj (.text)
+                  000872de    000002aa     App_DataCalc.obj (.text)
+                  00087588    0000029f     ConfigChip_CmpssInit.obj (.text)
+                  00087827    00000272     App_AdcDataDeal.obj (.text)
+                  00087a99    00000250     App_CanComm.obj (.text)
+                  00087ce9    0000024d     TaskSched.obj (.text)
+                  00087f36    0000021f     ConfigChip_AdcInit.obj (.text)
+                  00088155    0000021d     gpio.obj (.text)
+                  00088372    0000020b     ConfigChip_BoardCfg.obj (.text)
+                  0008857d    000001b0     f28p55x_gpio.obj (.text)
+                  0008872d    0000015f     adc.obj (.text)
+                  0008888c    0000014f     interrupt.obj (.text)
+                  000889db    0000013f     TaskOS.obj (.text)
+                  00088b1a    000000c5     ConfigChip_CustomUart.obj (.text)
+                  00088bdf    000000ab     Interrupt_Notch2f.obj (.text)
+                  00088c8a    00000099     ConfigChip_SysCtrlInit.obj (.text)
+                  00088d23    00000099     main.obj (.text)
+                  00088dbc    00000093     App_BootProto.obj (.text)
+                  00088e4f    00000067     f28p55x_cputimers.obj (.text)
+                  00088eb6    00000064     App_Gpio.obj (.text)
+                  00088f1a    00000061     App_HeatFilm.obj (.text)
+                  00088f7b    00000061     ConfigChip_DabPwmMap.obj (.text)
+                  00088fdc    00000052     Interrupt_CtrlDab.obj (.text)
+                  0008902e    00000041     ConfigChip_DspInit.obj (.text)
+                  0008906f    00000041     TaskOS.obj (.text:retain)
+                  000890b0    00000037     ConfigChip_SpiInit.obj (.text)
+                  000890e7    00000033     TaskSched.obj (.text:retain)
+                  0008911a    00000030     rts2800_fpu32_eabi.lib : copy_decompress_lzss.c.obj (.text:decompress:lzss)
+                  0008914a    0000002b                            : autoinit.c.obj (.text:__TI_auto_init_nobinit_nopinit)
+                  00089175    00000029     asysctl.obj (.text)
+                  0008919e    00000029     rts2800_fpu32_eabi.lib : exit.c.obj (.text)
+                  000891c7    00000028     f28p55x_piectrl.obj (.text)
+                  000891ef    00000028     globaldatadef.obj (.text)
+                  00089217    00000020     interrupt.obj (.text:retain)
+                  00089237    0000001d     rts2800_fpu32_eabi.lib : memcpy.c.obj (.text)
+                  00089254    00000018     Task_1ms.obj (.text)
+                  0008926c    00000017     rts2800_fpu32_eabi.lib : boot28.asm.obj (.text)
+                  00089283    00000013     f28p55x_pievect.obj (.text)
+                  00089296    00000010     Task_5ms.obj (.text)
+                  000892a6    0000000c     rts2800_fpu32_eabi.lib : args_main.c.obj (.text)
+                  000892b2    0000000b                            : u_div28.asm.obj (.text)
+                  000892bd    00000009                            : _lock.c.obj (.text)
+                  000892c6    00000008     Task_100us.obj (.text)
+                  000892ce    00000008     rts2800_fpu32_eabi.lib : copy_decompress_none.c.obj (.text:decompress:none)
+                  000892d6    00000008     f28p55x_codestartbranch.obj (.text)
+                  000892de    00000007     rts2800_fpu32_eabi.lib : memset.c.obj (.text)
+                  000892e5    00000006     cputimer.obj (.text)
+                  000892eb    00000006     rts2800_fpu32_eabi.lib : copy_zero_init.c.obj (.text:decompress:ZI)
+                  000892f1    00000002                            : pre_init.c.obj (.text)
+                  000892f3    00000001                            : startup.c.obj (.text)
 
-.cinit     0    0008a638    0000006e     
-                  0008a638    00000054     (.cinit..data.load) [load image, compression = lzss]
-                  0008a68c    00000006     (__TI_handler_table)
-                  0008a692    00000004     (.cinit..bss.load) [load image, compression = zero_init]
-                  0008a696    00000004     (.cinit.PieVectTableFile.load) [load image, compression = zero_init]
-                  0008a69a    0000000c     (__TI_cinit_table)
+.cinit     0    0008a230    0000006e     
+                  0008a230    00000054     (.cinit..data.load) [load image, compression = lzss]
+                  0008a284    00000006     (__TI_handler_table)
+                  0008a28a    00000004     (.cinit..bss.load) [load image, compression = zero_init]
+                  0008a28e    00000004     (.cinit.PieVectTableFile.load) [load image, compression = zero_init]
+                  0008a292    0000000c     (__TI_cinit_table)
 
 .reset     0    003fffc0    00000000     DSECT
 
 .stack     0    00000130    00000200     UNINITIALIZED
                   00000130    00000200     --HOLE--
 
-.bss       0    0000c000    00001178     UNINITIALIZED
+.bss       0    0000c000    00001164     UNINITIALIZED
                   0000c000    00000f14     globaldatadef.obj (.bss)
                   0000cf14    00000026     Interrupt_Notch2f.obj (.bss)
                   0000cf3a    00000006     ConfigChip_McanInit.obj (.bss)
@@ -289,15 +289,15 @@ Flash_AppInfo
                   0000d000    00000066     TaskSched.obj (.bss)
                   0000d066    00000018     App_StateMachine.obj (.bss)
                   0000d07e    00000002     main.obj (.bss:u6FirmwareCode)
-                  0000d080    00000064     App_CtrlData.obj (.bss)
-                  0000d0e4    0000001c     App_Fault.obj (.bss)
+                  0000d080    00000050     App_CtrlData.obj (.bss)
+                  0000d0d0    0000001c     App_Fault.obj (.bss)
+                  0000d0ec    0000000c     App_BootProto.obj (.bss)
+                  0000d0f8    00000004     ConfigChip_McanInit.obj (.bss:g_au32DabCanRxLostEvents)
+                  0000d0fc    00000004     main.obj (.bss)
                   0000d100    00000034     App_UartProto.obj (.bss)
-                  0000d134    0000000c     App_BootProto.obj (.bss)
+                  0000d134    0000000c     App_CanComm.obj (.bss)
                   0000d140    00000018     f28p55x_cputimers.obj (.bss)
-                  0000d158    0000000c     App_CanComm.obj (.bss)
-                  0000d164    0000000c     App_CurShare.obj (.bss)
-                  0000d170    00000004     ConfigChip_McanInit.obj (.bss:g_au32DabCanRxLostEvents)
-                  0000d174    00000004     main.obj (.bss)
+                  0000d158    0000000c     App_CurShare.obj (.bss)
 
 .init_array 
 *          0    00084028    00000000     UNINITIALIZED
@@ -319,15 +319,15 @@ Flash_AppInfo
                   0008449a    00000010     ConfigChip_McanInit.obj (.const:s_canExtFilter)
 
 .TI.ramfunc 
-*          0    000892e8    0000134c     RUN ADDR = 0000a000
-                  000892e8    00001188     Interrupt_CtrlDab.obj (.TI.ramfunc:retain)
-                  0008a470    000000a3     App_Fault.obj (.TI.ramfunc)
-                  0008a513    00000072     Interrupt_Notch2f.obj (.TI.ramfunc)
-                  0008a585    0000006a     Interrupt_CtrlDab.obj (.TI.ramfunc)
-                  0008a5ef    0000001f     f28p55x_sysctrl.obj (.TI.ramfunc)
-                  0008a60e    0000001e     App_HeatFilm.obj (.TI.ramfunc)
-                  0008a62c    00000004     f28p55x_usdelay.obj (.TI.ramfunc)
-                  0008a630    00000004     sysctl.obj (.TI.ramfunc)
+*          0    000892f8    00000f32     RUN ADDR = 0000a000
+                  000892f8    00000d72     Interrupt_CtrlDab.obj (.TI.ramfunc:retain)
+                  0008a06a    0000009f     App_Fault.obj (.TI.ramfunc)
+                  0008a109    00000072     Interrupt_Notch2f.obj (.TI.ramfunc)
+                  0008a17b    0000006a     Interrupt_CtrlDab.obj (.TI.ramfunc)
+                  0008a1e5    0000001f     f28p55x_sysctrl.obj (.TI.ramfunc)
+                  0008a204    0000001e     App_HeatFilm.obj (.TI.ramfunc)
+                  0008a222    00000004     f28p55x_usdelay.obj (.TI.ramfunc)
+                  0008a226    00000004     sysctl.obj (.TI.ramfunc)
 
 .const_cla 
 *          0    00009000    00000000     UNINITIALIZED
@@ -487,13 +487,13 @@ MODULE SUMMARY
     .\1_TaskApp\source\
        globaldatadef.obj                40      0         3860   
        App_UartProto.obj                757     446       52     
-       App_Fault.obj                    1196    0         28     
-       App_CtrlData.obj                 783     0         100    
-       App_StateMachine.obj             814     0         24     
+       App_Fault.obj                    1188    0         28     
+       App_StateMachine.obj             864     0         24     
+       App_CtrlData.obj                 776     0         80     
        App_AdcDataDeal.obj              626     0         156    
        App_CurShare.obj                 757     0         12     
-       App_DataCalc.obj                 721     0         0      
        App_CanComm.obj                  592     94        12     
+       App_DataCalc.obj                 682     0         0      
        App_HeatFilm.obj                 157     0         5      
        App_BootProto.obj                147     0         12     
        App_Gpio.obj                     100     0         0      
@@ -501,13 +501,13 @@ MODULE SUMMARY
        Task_5ms.obj                     16      0         0      
        Task_100us.obj                   8       0         0      
     +--+--------------------------------+-------+---------+---------+
-       Total:                           6738    540       4261   
+       Total:                           6734    540       4241   
                                                                  
     .\2_InterruptApp\source\
-       Interrupt_CtrlDab.obj            9259    0         14     
+       Interrupt_CtrlDab.obj            7178    0         16     
        Interrupt_Notch2f.obj            399     0         38     
     +--+--------------------------------+-------+---------+---------+
-       Total:                           9658    0         52     
+       Total:                           7577    0         54     
                                                                  
     .\3_UcosCode\source\
        TaskSched.obj                    640     0         110    
@@ -577,20 +577,20 @@ MODULE SUMMARY
        Stack:                           0       0         512    
        Linker Generated:                0       110       0      
     +--+--------------------------------+-------+---------+---------+
-       Grand Total:                     29903   1267      10421  
+       Grand Total:                     27818   1267      10403  
 
 
 LINKER GENERATED COPY TABLES
 
-__TI_cinit_table @ 0008a69a records: 3, size/record: 4, table size: 12
-	.data: load addr=0008a638, load size=00000054 bytes, run addr=0000d178, run size=00000091 bytes, compression=lzss
-	.bss: load addr=0008a692, load size=00000004 bytes, run addr=0000c000, run size=00001178 bytes, compression=zero_init
-	PieVectTableFile: load addr=0008a696, load size=00000004 bytes, run addr=00000d00, run size=000001c0 bytes, compression=zero_init
+__TI_cinit_table @ 0008a292 records: 3, size/record: 4, table size: 12
+	.data: load addr=0008a230, load size=00000054 bytes, run addr=0000d164, run size=00000093 bytes, compression=lzss
+	.bss: load addr=0008a28a, load size=00000004 bytes, run addr=0000c000, run size=00001164 bytes, compression=zero_init
+	PieVectTableFile: load addr=0008a28e, load size=00000004 bytes, run addr=00000d00, run size=000001c0 bytes, compression=zero_init
 
 
 LINKER GENERATED HANDLER TABLE
 
-__TI_handler_table @ 0008a68c records: 3, size/record: 2, table size: 6
+__TI_handler_table @ 0008a284 records: 3, size/record: 2, table size: 6
 	index: 0, handler: __TI_zero_init
 	index: 1, handler: __TI_decompress_lzss
 	index: 2, handler: __TI_decompress_none
@@ -678,47 +678,46 @@ address     data page           name
 
 0000d080     342 (0000d080)     g_CtrlBusRef_V
 0000d082     342 (0000d080)     stDabParam
-0000d088     342 (0000d080)     Ramp
-0000d08e     342 (0000d080)     RampTarget
-0000d094     342 (0000d080)     stDabDuty0
-0000d09c     342 (0000d080)     stDabDuty1
-0000d0a4     342 (0000d080)     Bus
+0000d086     342 (0000d080)     Ramp
+0000d08c     342 (0000d080)     RampTarget
+0000d092     342 (0000d080)     stDabDuty0
+0000d09a     342 (0000d080)     stDabDuty1
+0000d0a2     342 (0000d080)     Bus
+0000d0b0     342 (0000d080)     stDabPi0
 
-0000d0c0     343 (0000d0c0)     stDabPi0
-0000d0d2     343 (0000d0c0)     stDabPi1
-0000d0e4     343 (0000d0c0)     stFault
-0000d0e8     343 (0000d0c0)     stFaultCnt
+0000d0c0     343 (0000d0c0)     stDabPi1
+0000d0d0     343 (0000d0c0)     stFault
+0000d0d4     343 (0000d0c0)     stFaultCnt
+0000d0ec     343 (0000d0c0)     stBootProto
+0000d0f8     343 (0000d0c0)     g_au32DabCanRxLostEvents
+0000d0fc     343 (0000d0c0)     u16BootSoftwareVerison
+0000d0fd     343 (0000d0c0)     u16BootSoftwareSubverison
+0000d0fe     343 (0000d0c0)     u16SoftwareVerison
+0000d0ff     343 (0000d0c0)     u16SoftwareSubverison
 
 0000d100     344 (0000d100)     stUartProto
-0000d134     344 (0000d100)     stBootProto
+0000d134     344 (0000d100)     g_u32CanShareTxOk
+0000d136     344 (0000d100)     g_u32CanShareTxMiss
 
 0000d140     345 (0000d140)     CpuTimer0
 0000d148     345 (0000d140)     CpuTimer1
 0000d150     345 (0000d140)     CpuTimer2
-0000d158     345 (0000d140)     g_u32CanShareTxOk
-0000d15a     345 (0000d140)     g_u32CanShareTxMiss
-0000d166     345 (0000d140)     CurShare
-0000d170     345 (0000d140)     g_au32DabCanRxLostEvents
-0000d174     345 (0000d140)     u16BootSoftwareVerison
-0000d175     345 (0000d140)     u16BootSoftwareSubverison
-0000d176     345 (0000d140)     u16SoftwareVerison
-0000d177     345 (0000d140)     u16SoftwareSubverison
+0000d15a     345 (0000d140)     CurShare
 
-0000d198     346 (0000d180)     taskBoxTable
+0000d184     346 (0000d180)     taskBoxTable
+0000d1a2     346 (0000d180)     g_stDabIsrState
 
-0000d1c6     347 (0000d1c0)     g_stDabIsrState
-0000d1d4     347 (0000d1c0)     u32TaskRunTimeMaxUs
-0000d1de     347 (0000d1c0)     u32TaskRunTimeUs
-0000d1f6     347 (0000d1c0)     __TI_enable_exit_profile_output
-0000d1f8     347 (0000d1c0)     __TI_cleanup_ptr
-0000d1fa     347 (0000d1c0)     __TI_dtors_ptr
-0000d1fe     347 (0000d1c0)     u32Tick_Count
-
-0000d200     348 (0000d200)     g_u16DabCanInitError
-0000d202     348 (0000d200)     pCommSpiRegs
-0000d204     348 (0000d200)     _lock
-0000d206     348 (0000d200)     _unlock
-0000d208     348 (0000d200)     g_u16DabPwmTicks100us
+0000d1c2     347 (0000d1c0)     u32TaskRunTimeMaxUs
+0000d1cc     347 (0000d1c0)     u32TaskRunTimeUs
+0000d1e4     347 (0000d1c0)     __TI_enable_exit_profile_output
+0000d1e6     347 (0000d1c0)     __TI_cleanup_ptr
+0000d1e8     347 (0000d1c0)     __TI_dtors_ptr
+0000d1ec     347 (0000d1c0)     u32Tick_Count
+0000d1ee     347 (0000d1c0)     g_u16DabCanInitError
+0000d1f0     347 (0000d1c0)     pCommSpiRegs
+0000d1f2     347 (0000d1c0)     _lock
+0000d1f4     347 (0000d1c0)     _unlock
+0000d1f6     347 (0000d1c0)     g_u16DabPwmTicks100us
 
 0005d200    1748 (0005d200)     ClkCfgRegs
 
@@ -768,41 +767,41 @@ page  address   name
 0     000857be  ADCE3_ISR                          
 0     000857b4  ADCE4_ISR                          
 0     000857aa  ADCE_EVT_ISR                       
-0     0008885b  ADC_configPPBFilter                
-0     00088827  ADC_configureRepeater              
-0     000887d8  ADC_setINLTrim                     
-0     0008879e  ADC_setOffsetTrim                  
-0     0008875b  ADC_setPPBTripLimits               
-0     00088729  ADC_setVREF                        
+0     0008885f  ADC_configPPBFilter                
+0     0008882b  ADC_configureRepeater              
+0     000887dc  ADC_setINLTrim                     
+0     000887a2  ADC_setOffsetTrim                  
+0     0008875f  ADC_setPPBTripLimits               
+0     0008872d  ADC_setVREF                        
 0     000857a0  AES_SINTREQUEST_ISR                
-0     0008917b  ASysCtl_setAnalogReferenceExternal 
-0     0008916f  ASysCtl_setAnalogReferenceInternal 
-0     00089166  ASysCtl_setAnalogReferenceVDDA     
-0     00087a83  AdcCtrlInit                        
-0     000878a7  AdcDabFilt1ms                      
-0     00087823  Adc_CalibCurrZero                  
+0     0008918a  ASysCtl_setAnalogReferenceExternal 
+0     0008917e  ASysCtl_setAnalogReferenceInternal 
+0     00089175  ASysCtl_setAnalogReferenceVDDA     
+0     00087a87  AdcCtrlInit                        
+0     000878ab  AdcDabFilt1ms                      
+0     00087827  Adc_CalibCurrZero                  
 1     00007400  AdcaRegs                           
 1     00001800  AdcaResultRegs                     
 1     00007600  AdcbRegs                           
 1     00001880  AdcbResultRegs                     
 1     00006a00  AdccRegs                           
 1     00001900  AdccResultRegs                     
-0     00088f07  AppGpio_DrvEnSet                   
-0     00088ec1  AppGpio_Init                       
-0     00088ec1  AppGpio_PowerSafeOff               
-0     00088ee2  AppGpio_RelayBusSet                
-0     00088edd  AppGpio_SafeOff                    
-0     00088eb2  AppGpio_SoftRlySet                 
-0     00088566  Board_Init                         
-0     000883e4  Board_LedToggle                    
-0     0008837f  Board_PrepareForBoot               
-0     00088e46  BootProto_Init                     
-0     00088db8  BootProto_ResetRx                  
-0     00088dfb  BootProto_RxByte                   
-0     00088dc9  BootProto_Task_1ms                 
-0     00088dbe  BootProto_Task_Rx                  
-0     0000d0a4  Bus                                
-0     0008918f  C$$EXIT                            
+0     00088f0b  AppGpio_DrvEnSet                   
+0     00088ec5  AppGpio_Init                       
+0     00088ec5  AppGpio_PowerSafeOff               
+0     00088ee6  AppGpio_RelayBusSet                
+0     00088ee1  AppGpio_SafeOff                    
+0     00088eb6  AppGpio_SoftRlySet                 
+0     0008856a  Board_Init                         
+0     000883e8  Board_LedToggle                    
+0     00088383  Board_PrepareForBoot               
+0     00088e4a  BootProto_Init                     
+0     00088dbc  BootProto_ResetRx                  
+0     00088dff  BootProto_RxByte                   
+0     00088dcd  BootProto_Task_1ms                 
+0     00088dc2  BootProto_Task_Rx                  
+0     0000d0a2  Bus                                
+0     0008919e  C$$EXIT                            
 0     00085796  CLA1_1_ISR                         
 0     0008578c  CLA1_2_ISR                         
 0     00085782  CLA1_3_ISR                         
@@ -813,12 +812,12 @@ page  address   name
 0     00085750  CLA1_8_ISR                         
 0     00085746  CLB1_ISR                           
 0     0008573c  CLB2_ISR                           
-0     000892d6  CPUTimer_setEmulationMode          
-0     00087cd8  CanComm_Init                       
-0     00087cc1  CanComm_SetLocalAddr               
-0     00087ca5  CanComm_Task_5ms                   
-0     00087c9e  CanComm_Task_Rx                    
-0     00087bd2  CanComm_Task_Tx_1ms                
+0     000892e5  CPUTimer_setEmulationMode          
+0     00087cdc  CanComm_Init                       
+0     00087cc5  CanComm_SetLocalAddr               
+0     00087ca9  CanComm_Task_5ms                   
+0     00087ca2  CanComm_Task_Rx                    
+0     00087bd6  CanComm_Task_Tx_1ms                
 0     0000c001  CfgParam                           
 abs   00000000  Cla1ConstLoadSize                  
 0     00009000  Cla1ConstLoadStart                 
@@ -827,8 +826,8 @@ abs   00000000  Cla1ProgLoadSize
 0     00004000  Cla1ProgLoadStart                  
 0     00004000  Cla1ProgRunStart                   
 1     0005d200  ClkCfgRegs                         
-0     00086433  ComputeCntrSeedValue               
-0     00088e8c  ConfigCpuTimer                     
+0     00086465  ComputeCntrSeedValue               
+0     00088e90  ConfigCpuTimer                     
 1     0005d300  CpuSysRegs                         
 0     0000d140  CpuTimer0                          
 1     00000c00  CpuTimer0Regs                      
@@ -836,28 +835,28 @@ abs   00000000  Cla1ProgLoadSize
 1     00000c08  CpuTimer1Regs                      
 0     0000d150  CpuTimer2                          
 1     00000c10  CpuTimer2Regs                      
-0     000869f2  Ctrl_CalcGiven                     
-0     000869d1  Ctrl_Init                          
-0     00086979  Ctrl_RampCfg                       
-0     0008686f  Ctrl_RampDone                      
-0     0008686b  Ctrl_RampInitCold                  
-0     00086865  Ctrl_RampInitSwitch                
-0     00086713  Ctrl_SetMode                       
-0     00086a86  Ctrl_StandbyClear                  
-0     0000d166  CurShare                           
-0     00086ca9  CurShare_FillTx41                  
-0     00086c4a  CurShare_FillTx42                  
-0     00086a86  CurShare_ResetComp                 
-0     00086c43  CurShare_ResetPeers                
-0     00086bfc  CurShare_Rx41                      
-0     00086bd4  CurShare_Rx42                      
-0     00086bca  CurShare_Task_50ms                 
-0     00086a97  CurShare_Update1ms                 
-0     00088ba4  CustomUart_Init                    
-0     00088b96  CustomUart_PopRxByte               
-0     00088b63  CustomUart_RxService               
-0     00088b41  CustomUart_Task_1ms                
-0     00088b16  CustomUart_Write                   
+0     00086a1d  Ctrl_CalcGiven                     
+0     000869fc  Ctrl_Init                          
+0     000869a4  Ctrl_RampCfg                       
+0     0008689a  Ctrl_RampDone                      
+0     00086896  Ctrl_RampInitCold                  
+0     00086890  Ctrl_RampInitSwitch                
+0     00086742  Ctrl_SetMode                       
+0     00086ab1  Ctrl_StandbyClear                  
+0     0000d15a  CurShare                           
+0     00086cd4  CurShare_FillTx41                  
+0     00086c75  CurShare_FillTx42                  
+0     00086ab1  CurShare_ResetComp                 
+0     00086c6e  CurShare_ResetPeers                
+0     00086c27  CurShare_Rx41                      
+0     00086bff  CurShare_Rx42                      
+0     00086bf5  CurShare_Task_50ms                 
+0     00086ac2  CurShare_Update1ms                 
+0     00088ba8  CustomUart_Init                    
+0     00088b9a  CustomUart_PopRxByte               
+0     00088b67  CustomUart_RxService               
+0     00088b45  CustomUart_Task_1ms                
+0     00088b1a  CustomUart_Write                   
 0     00085acd  DAB_PWM_Init                       
 0     00085cfa  DAB_PWM_OstStop                    
 0     00085c18  DAB_PWM_SetMode                    
@@ -872,28 +871,28 @@ abs   00000000  Cla1ProgLoadSize
 0     000856f6  DMA_CH4_ISR                        
 0     000856ec  DMA_CH5_ISR                        
 0     000856e2  DMA_CH6_ISR                        
-0     00087567  DabCan_CancelTx                    
-0     0008752c  DabCan_CheckState                  
-0     00087524  DabCan_InitBusy                    
-0     00087520  DabCan_InitPoll                    
-0     000874c9  DabCan_Recv                        
-0     0008745a  DabCan_Reinit                      
-0     0008743b  DabCan_Send                        
-0     000873c9  DabCan_TxReady                     
-0     000873ac  DabCan_TxSucceeded                 
-0     000877c2  DabCmpss_ClearFilterLatch          
-0     00087794  DabCmpss_ClearFilterLatchSrc       
-0     000877c6  DabCmpss_ClearTrip                 
-0     00087808  DabCmpss_ReadTripSrc               
-0     00088f77  DabPwm_MirrorShadowBridge2         
-0     00088ffb  Dab_Ctrl_DisFfUpdate100us          
-0     00088fe6  Dab_Ctrl_InvBatVoltUpdate          
-0     00088fd8  Dab_Ctrl_SessionReset              
+0     000872c1  DabCan_CancelTx                    
+0     00087286  DabCan_CheckState                  
+0     0008727e  DabCan_InitBusy                    
+0     0008727a  DabCan_InitPoll                    
+0     00087223  DabCan_Recv                        
+0     000871b4  DabCan_Reinit                      
+0     00087195  DabCan_Send                        
+0     00087123  DabCan_TxReady                     
+0     00087106  DabCan_TxSucceeded                 
+0     000877c6  DabCmpss_ClearFilterLatch          
+0     00087798  DabCmpss_ClearFilterLatchSrc       
+0     000877ca  DabCmpss_ClearTrip                 
+0     0008780c  DabCmpss_ReadTripSrc               
+0     00088f7b  DabPwm_MirrorShadowBridge2         
+0     00088fff  Dab_Ctrl_DisFfUpdate100us          
+0     00088fea  Dab_Ctrl_InvBatVoltUpdate          
+0     00088fdc  Dab_Ctrl_SessionReset              
 0     0000c100  DataScope                          
 1     0005e700  Dcc0Regs                           
 1     0005e740  Dcc1Regs                           
-0     00086613  DisableDog                         
-0     000866d3  DisablePeripheralClocks            
+0     00086645  DisableDog                         
+0     00086705  DisablePeripheralClocks            
 0     000856d8  ECAP1_ISR                          
 0     000856ce  ECAP2_ISR                          
 0     000856c1  EMPTY_ISR                          
@@ -936,8 +935,8 @@ abs   00000000  Cla1ProgLoadSize
 0     000855c7  EQEP1_ISR                          
 0     000855bd  EQEP2_ISR                          
 0     000855b3  EQEP3_ISR                          
-0     000891d7  EnableInterrupts                   
-0     0000b344  F28x_usDelay                       
+0     000891e6  EnableInterrupts                   
+0     0000af2a  F28x_usDelay                       
 0     000855a9  FLSS_ISR                           
 0     0008559f  FSIRXA1_ISR                        
 0     00085595  FSIRXA2_ISR                        
@@ -946,7 +945,7 @@ abs   00000000  Cla1ProgLoadSize
 0     00086091  Fault_ClearRelay                   
 0     0008608a  Fault_ClearSoftTo                  
 0     00086023  Fault_Detect5ms                    
-0     0000b188  Fault_FastProtect                  
+0     0000ad72  Fault_FastProtect                  
 0     00085d74  Fault_Init                         
 0     00085d5f  Fault_PreStartHwOk                 
 0     00085d3d  Fault_SetRelay                     
@@ -954,68 +953,68 @@ abs   00000000  Cla1ProgLoadSize
 1     0005f800  Flash0CtrlRegs                     
 1     0005fb00  Flash0EccRegs                      
 abs   00000128  FromAppRequestFlag                 
-0     00088714  GPIO_ReadPin                       
-0     000886f4  GPIO_SetupLock                     
-0     00088673  GPIO_SetupPinMux                   
-0     000885ef  GPIO_SetupPinOptions               
-0     000885e9  GPIO_SetupXINT1Gpio                
-0     000885e3  GPIO_SetupXINT2Gpio                
-0     000885dd  GPIO_SetupXINT3Gpio                
-0     000885d7  GPIO_SetupXINT4Gpio                
-0     000885d1  GPIO_SetupXINT5Gpio                
-0     000885b7  GPIO_WritePin                      
-0     0008835d  GPIO_getDirectionMode              
-0     0008832f  GPIO_getPadConfig                  
-0     00088316  GPIO_getQualificationMode          
-0     0008826c  GPIO_setAnalogMode                 
-0     00088246  GPIO_setControllerCore             
-0     00088227  GPIO_setDirectionMode              
-0     00088205  GPIO_setInterruptPin               
-0     000881c6  GPIO_setPadConfig                  
-0     00088197  GPIO_setPinConfig                  
-0     00088171  GPIO_setQualificationMode          
-0     00088151  GPIO_setQualificationPeriod        
+0     00088718  GPIO_ReadPin                       
+0     000886f8  GPIO_SetupLock                     
+0     00088677  GPIO_SetupPinMux                   
+0     000885f3  GPIO_SetupPinOptions               
+0     000885ed  GPIO_SetupXINT1Gpio                
+0     000885e7  GPIO_SetupXINT2Gpio                
+0     000885e1  GPIO_SetupXINT3Gpio                
+0     000885db  GPIO_SetupXINT4Gpio                
+0     000885d5  GPIO_SetupXINT5Gpio                
+0     000885bb  GPIO_WritePin                      
+0     00088361  GPIO_getDirectionMode              
+0     00088333  GPIO_getPadConfig                  
+0     0008831a  GPIO_getQualificationMode          
+0     00088270  GPIO_setAnalogMode                 
+0     0008824a  GPIO_setControllerCore             
+0     0008822b  GPIO_setDirectionMode              
+0     00088209  GPIO_setInterruptPin               
+0     000881ca  GPIO_setPadConfig                  
+0     0008819b  GPIO_setPinConfig                  
+0     00088175  GPIO_setQualificationMode          
+0     00088155  GPIO_setQualificationPeriod        
 1     00007c00  GpioCtrlRegs                       
 1     00007f00  GpioDataRegs                       
-0     000866c2  HALT                               
-0     00088f16  HeatFilm_Init                      
-0     0000b326  HeatFilm_Isr                       
-0     00088f16  HeatFilm_Off                       
-0     00088f60  HeatFilm_SetDutyPct                
-0     00088f28  HeatFilm_SetEnable                 
-0     00088f69  HeatFilm_Task                      
+0     000866f4  HALT                               
+0     00088f1a  HeatFilm_Init                      
+0     0000af0c  HeatFilm_Isr                       
+0     00088f1a  HeatFilm_Off                       
+0     00088f64  HeatFilm_SetDutyPct                
+0     00088f2c  HeatFilm_SetEnable                 
+0     00088f6d  HeatFilm_Task                      
 0     00085577  I2CA_FIFO_ISR                      
 0     0008556d  I2CA_ISR                           
 0     00085563  I2CB_FIFO_ISR                      
 0     00085559  I2CB_ISR                           
-0     000866b9  IDLE                               
+0     000866eb  IDLE                               
 0     0008554f  ILLEGAL_ISR                        
-0     00088072  InitChip_AdcRegs                   
-0     000877fb  InitChip_CmpssRegs                 
-0     0008901f  InitChip_CpuTimerRegs              
-0     00087f32  InitChip_DMARegs                   
+0     00088076  InitChip_AdcRegs                   
+0     000877ff  InitChip_CmpssRegs                 
+0     0008902e  InitChip_CpuTimerRegs              
+0     00087f36  InitChip_DMARegs                   
 0     00085acd  InitChip_EpwmRegs                  
-0     000890a1  InitChip_SpiRegs                   
-0     00088d01  InitChip_SysCtrlRegs               
-0     00088e4b  InitCpuTimers                      
-0     0008902e  InitDSP                            
-0     0000b307  InitFlash                          
-0     00088579  InitGpio                           
-0     00086620  InitPeripheralClocks               
-0     00088c86  InitPeripheralClocks_User          
-0     000891b8  InitPieCtrl                        
-0     00089274  InitPieVectTable                   
-0     0008669b  InitSysCtrl                        
-0     00086532  InitSysPll                         
+0     000890b0  InitChip_SpiRegs                   
+0     00088d05  InitChip_SysCtrlRegs               
+0     00088e4f  InitCpuTimers                      
+0     0008903d  InitDSP                            
+0     0000aeed  InitFlash                          
+0     0008857d  InitGpio                           
+0     00086652  InitPeripheralClocks               
+0     00088c8a  InitPeripheralClocks_User          
+0     000891c7  InitPieCtrl                        
+0     00089283  InitPieVectTable                   
+0     000866cd  InitSysCtrl                        
+0     00086564  InitSysPll                         
 1     00007900  InputXbarRegs                      
-0     0008921c  Interrupt_defaultHandler           
-0     0008898b  Interrupt_disable                  
-0     000888e2  Interrupt_enable                   
-0     00089212  Interrupt_illegalOperationHandler  
-0     000888a4  Interrupt_initModule               
-0     00088888  Interrupt_initVectorTable          
-0     00089208  Interrupt_nmiHandler               
-0     000864a2  IsPLLValid                         
+0     0008922b  Interrupt_defaultHandler           
+0     0008898f  Interrupt_disable                  
+0     000888e6  Interrupt_enable                   
+0     00089221  Interrupt_illegalOperationHandler  
+0     000888a8  Interrupt_initModule               
+0     0008888c  Interrupt_initVectorTable          
+0     00089217  Interrupt_nmiHandler               
+0     000864d4  IsPLLValid                         
 0     00085545  LINA_0_ISR                         
 0     0008553b  LINA_1_ISR                         
 0     00085531  MCANA_0_ISR                        
@@ -1102,28 +1101,28 @@ abs   00000128  FromAppRequestFlag
 0     000844cb  MCAN_writeTxEventFIFOAck           
 0     000854e1  NMI_ISR                            
 0     000854d7  NOTUSED_ISR                        
-0     00088c6b  Notch2f_Init                       
-0     0000b22b  Notch2f_Isr                        
-0     00088c3f  Notch2f_ParamUpdate5ms             
-0     00088b04  OSEventConfirm                     
-0     00088af7  OSEventSend                        
-0     00088a82  OSISREventClr                      
-0     000889d7  OSISREventSend                     
-0     00089060  OSTimerTick                        
+0     00088c6f  Notch2f_Init                       
+0     0000ae11  Notch2f_Isr                        
+0     00088c43  Notch2f_ParamUpdate5ms             
+0     00088b08  OSEventConfirm                     
+0     00088afb  OSEventSend                        
+0     00088a86  OSISREventClr                      
+0     000889db  OSISREventSend                     
+0     0008906f  OSTimerTick                        
 0     000854cd  PIE_RESERVED_ISR                   
 0     000854c3  PMBUSA_ISR                         
 1     00000ce0  PieCtrlRegs                        
 1     00000d00  PieVectTable                       
 0     00084040  PieVectTableInit                   
 0     000854b9  RTOS_ISR                           
-0     0008a634  RamfuncsLoadEnd                    
-abs   0000134c  RamfuncsLoadSize                   
-0     000892e8  RamfuncsLoadStart                  
-0     0000b34c  RamfuncsRunEnd                     
-abs   0000134c  RamfuncsRunSize                    
+0     0008a22a  RamfuncsLoadEnd                    
+abs   00000f32  RamfuncsLoadSize                   
+0     000892f8  RamfuncsLoadStart                  
+0     0000af32  RamfuncsRunEnd                     
+abs   00000f32  RamfuncsRunSize                    
 0     0000a000  RamfuncsRunStart                   
-0     0000d088  Ramp                               
-0     0000d08e  RampTarget                         
+0     0000d086  Ramp                               
+0     0000d08c  RampTarget                         
 0     0000d068  RunState                           
 0     000854af  SCIA_RX_ISR                        
 0     000854a5  SCIA_TX_ISR                        
@@ -1131,9 +1130,9 @@ abs   0000134c  RamfuncsRunSize
 0     00085491  SCIB_TX_ISR                        
 0     00085487  SCIC_RX_ISR                        
 0     0008547d  SCIC_TX_ISR                        
-0     000863b6  SM_Init                            
-0     000863a6  SM_SoftStartTick5ms                
-0     00086314  SM_Standby_100us                   
+0     000863e8  SM_Init                            
+0     000863d8  SM_SoftStartTick5ms                
+0     00086349  SM_Standby_100us                   
 0     00086262  SM_Step_2ms                        
 0     00086098  SM_SyncSysCmd                      
 0     00085473  SPIA_RX_ISR                        
@@ -1142,42 +1141,42 @@ abs   0000134c  RamfuncsRunSize
 0     00085455  SPIB_TX_ISR                        
 0     0008544b  SYS_ERR_ISR                        
 1     00007210  ScibRegs                           
-0     00086426  ServiceDog                         
-0     00088d1f  Software_Version_Handle            
+0     00086458  ServiceDog                         
+0     00088d23  Software_Version_Handle            
 1     00006110  SpibRegs                           
 0     0000d066  SysCmd                             
-0     0000b348  SysCtl_delay                       
-0     0008641d  SysIntOsc1Sel                      
-0     00086416  SysIntOsc2Sel                      
-0     00086401  SysXtalOscSESel                    
-0     000863e1  SysXtalOscSel                      
-0     00087f2e  Sys_GetTick100us                   
-0     00087f2a  Sys_GetTick10ms                    
-0     00087f26  Sys_GetTick1ms                     
-0     00087eeb  Sys_TaskAdd                        
-0     00087ecb  Sys_TaskDelete                     
-0     00087eb4  Sys_TaskFind                       
-0     00087ea1  Sys_TaskInit                       
-0     00087e16  Sys_TaskRun                        
-0     00087d76  Sys_TimeProc                       
-0     00087d5f  Sys_TimeSetDate                    
-0     00087d43  Sys_TimeSetRTC                     
+0     0000af2e  SysCtl_delay                       
+0     0008644f  SysIntOsc1Sel                      
+0     00086448  SysIntOsc2Sel                      
+0     00086433  SysXtalOscSESel                    
+0     00086413  SysXtalOscSel                      
+0     00087f32  Sys_GetTick100us                   
+0     00087f2e  Sys_GetTick10ms                    
+0     00087f2a  Sys_GetTick1ms                     
+0     00087eef  Sys_TaskAdd                        
+0     00087ecf  Sys_TaskDelete                     
+0     00087eb8  Sys_TaskFind                       
+0     00087ea5  Sys_TaskInit                       
+0     00087e1a  Sys_TaskRun                        
+0     00087d7a  Sys_TimeProc                       
+0     00087d63  Sys_TimeSetDate                    
+0     00087d47  Sys_TimeSetRTC                     
 0     00085441  TIMER0_ISR                         
 0     00085437  TIMER1_ISR                         
 0     0008542d  TIMER2_ISR                         
-0     000892b7  Task100us                          
-0     000892bc  Task100us_Entry                    
-0     00089245  Task1ms                            
-0     0008925a  Task1ms_Entry                      
+0     000892c6  Task100us                          
+0     000892cb  Task100us_Entry                    
+0     00089254  Task1ms                            
+0     00089269  Task1ms_Entry                      
 0     00086262  Task2ms                            
-0     00086bca  Task50ms                           
-0     00089287  Task5ms                            
-0     00089294  Task5ms_Entry                      
+0     00086bf5  Task50ms                           
+0     00089296  Task5ms                            
+0     000892a3  Task5ms_Entry                      
 0     0000d000  TaskSched                          
-0     00087ce5  TaskSched_TimeBase100us            
-0     00088a90  Task_InvokingProcess               
-0     00088a10  Task_System_AppInit                
-0     000889e4  Task_TimerCheckIn                  
+0     00087ce9  TaskSched_TimeBase100us            
+0     00088a94  Task_InvokingProcess               
+0     00088a14  Task_System_AppInit                
+0     000889e8  Task_TimerCheckIn                  
 0     00085423  USBA_ISR                           
 0     00085419  USER10_ISR                         
 0     0008540f  USER11_ISR                         
@@ -1191,14 +1190,14 @@ abs   0000134c  RamfuncsRunSize
 0     000853bf  USER7_ISR                          
 0     000853b5  USER8_ISR                          
 0     000853ab  USER9_ISR                          
-0     00086fe0  UartProto_CmdIdleMs                
-0     00086fdc  UartProto_GetHotCmd                
-0     00086fd8  UartProto_GetPackSum               
-0     00086fc5  UartProto_Init                     
-0     00086f89  UartProto_RxTask                   
-0     00086d2f  UartProto_SendPacket               
-0     00086e64  UartProto_Task_5ms                 
-0     00086fe6  Update_CanMon                      
+0     0008700b  UartProto_CmdIdleMs                
+0     00087007  UartProto_GetHotCmd                
+0     00087003  UartProto_GetPackSum               
+0     00086ff0  UartProto_Init                     
+0     00086fb4  UartProto_RxTask                   
+0     00086d5a  UartProto_SendPacket               
+0     00086e8f  UartProto_Task_5ms                 
+0     000872de  Update_CanMon                      
 0     000853a1  VCU_ISR                            
 0     00085397  WAKE_ISR                           
 1     00007000  WdRegs                             
@@ -1207,81 +1206,81 @@ abs   0000134c  RamfuncsRunSize
 0     00085379  XINT3_ISR                          
 0     0008536f  XINT4_ISR                          
 0     00085365  XINT5_ISR                          
-0     0008a69a  __TI_CINIT_Base                    
-0     0008a6a6  __TI_CINIT_Limit                   
-0     0008a6a6  __TI_CINIT_Warm                    
-0     0008a68c  __TI_Handler_Table_Base            
-0     0008a692  __TI_Handler_Table_Limit           
+0     0008a292  __TI_CINIT_Base                    
+0     0008a29e  __TI_CINIT_Limit                   
+0     0008a29e  __TI_CINIT_Warm                    
+0     0008a284  __TI_Handler_Table_Base            
+0     0008a28a  __TI_Handler_Table_Limit           
 0     00000330  __TI_STACK_END                     
 abs   00000200  __TI_STACK_SIZE                    
-0     0008913b  __TI_auto_init_nobinit_nopinit     
-0     0000d1f8  __TI_cleanup_ptr                   
-0     0008910b  __TI_decompress_lzss               
-0     000892bf  __TI_decompress_none               
-0     0000d1fa  __TI_dtors_ptr                     
-0     0000d1f6  __TI_enable_exit_profile_output    
+0     0008914a  __TI_auto_init_nobinit_nopinit     
+0     0000d1e6  __TI_cleanup_ptr                   
+0     0008911a  __TI_decompress_lzss               
+0     000892ce  __TI_decompress_none               
+0     0000d1e8  __TI_dtors_ptr                     
+0     0000d1e4  __TI_enable_exit_profile_output    
 abs   ffffffff  __TI_pprof_out_hndl                
 abs   ffffffff  __TI_prof_data_size                
 abs   ffffffff  __TI_prof_data_start               
-0     000892dc  __TI_zero_init                     
-0     000892a3  __c28xabi_divu                     
-0     000892a8  __c28xabi_modu                     
+0     000892eb  __TI_zero_init                     
+0     000892b2  __c28xabi_divu                     
+0     000892b7  __c28xabi_modu                     
 n/a   UNDEFED   __c_args__                         
 0     00000130  __stack                            
-0     00089297  _args_main                         
-0     0008925d  _c_int00                           
-0     0000d204  _lock                              
-0     000892b6  _nop                               
-0     000892b2  _register_lock                     
-0     000892ae  _register_unlock                   
-0     000892e4  _system_post_cinit                 
-0     000892e2  _system_pre_init                   
-0     0000d206  _unlock                            
-0     0008918f  abort                              
+0     000892a6  _args_main                         
+0     0008926c  _c_int00                           
+0     0000d1f2  _lock                              
+0     000892c5  _nop                               
+0     000892c1  _register_lock                     
+0     000892bd  _register_unlock                   
+0     000892f3  _system_post_cinit                 
+0     000892f1  _system_pre_init                   
+0     0000d1f4  _unlock                            
+0     0008919e  abort                              
 0     00080000  code_start                         
 0     0008445e  constTaskBoxTable                  
-0     00089191  exit                               
+0     000891a0  exit                               
 0     0000c080  g_CanMon                           
 0     0000d080  g_CtrlBusRef_V                     
 0     0000cf1c  g_Notch2f                          
-0     0000d170  g_au32DabCanRxLostEvents           
-0     0000d1c6  g_stDabIsrState                    
+0     0000d0f8  g_au32DabCanRxLostEvents           
+0     0000d1a2  g_stDabIsrState                    
 0     0000cffa  g_stHeatFilm                       
-0     0000d200  g_u16DabCanInitError               
-0     0000d208  g_u16DabPwmTicks100us              
-0     0000d15a  g_u32CanShareTxMiss                
-0     0000d158  g_u32CanShareTxOk                  
+0     0000d1ee  g_u16DabCanInitError               
+0     0000d1f6  g_u16DabPwmTicks100us              
+0     0000d136  g_u32CanShareTxMiss                
+0     0000d134  g_u32CanShareTxOk                  
 0     0000cf3e  g_u32DabCanRestrictedAsmCount      
 0     0000cf3c  g_u32DabCanUnexpectedInitCount     
-0     00087394  init_Drv_can                       
-0     000891e0  init_global_data                   
-0     00088d5d  main                               
-0     00089228  memcpy                             
-0     000892cf  memset                             
-0     0000d202  pCommSpiRegs                       
+0     000870ee  init_Drv_can                       
+0     000891ef  init_global_data                   
+0     00088d61  main                               
+0     00089237  memcpy                             
+0     000892de  memset                             
+0     0000d1f0  pCommSpiRegs                       
 0     0000c000  sCanMes                            
-0     00087cff  sCpuTimer2Init                     
-0     000890d8  sCpuTimer2_ISR                     
+0     00087d03  sCpuTimer2Init                     
+0     000890e7  sCpuTimer2_ISR                     
 0     0000cf80  stADC                              
 0     00084008  stAppInfo                          
-0     0000d134  stBootProto                        
+0     0000d0ec  stBootProto                        
 0     0000cfd6  stCustomUart                       
-0     0000d094  stDabDuty0                         
-0     0000d09c  stDabDuty1                         
+0     0000d092  stDabDuty0                         
+0     0000d09a  stDabDuty1                         
 0     0000d082  stDabParam                         
-0     0000d0c0  stDabPi0                           
-0     0000d0d2  stDabPi1                           
-0     0000d0e4  stFault                            
-0     0000d0e8  stFaultCnt                         
+0     0000d0b0  stDabPi0                           
+0     0000d0c0  stDabPi1                           
+0     0000d0d0  stFault                            
+0     0000d0d4  stFaultCnt                         
 0     0000d100  stUartProto                        
-0     0000d198  taskBoxTable                       
-0     0000d175  u16BootSoftwareSubverison          
-0     0000d174  u16BootSoftwareVerison             
-0     0000d177  u16SoftwareSubverison              
-0     0000d176  u16SoftwareVerison                 
-0     0000d1d4  u32TaskRunTimeMaxUs                
-0     0000d1de  u32TaskRunTimeUs                   
-0     0000d1fe  u32Tick_Count                      
+0     0000d184  taskBoxTable                       
+0     0000d0fd  u16BootSoftwareSubverison          
+0     0000d0fc  u16BootSoftwareVerison             
+0     0000d0ff  u16SoftwareSubverison              
+0     0000d0fe  u16SoftwareVerison                 
+0     0000d1c2  u32TaskRunTimeMaxUs                
+0     0000d1cc  u32TaskRunTimeUs                   
+0     0000d1ec  u32Tick_Count                      
 0     0000d07e  u6FirmwareCode                     
 0     0000c040  uMdlAddMes                         
 
@@ -1298,13 +1297,13 @@ page  address   name
 0     00009000  Cla1ConstRunStart                  
 0     0000a000  EPWM10_ISR                         
 0     0000a000  RamfuncsRunStart                   
-0     0000b188  Fault_FastProtect                  
-0     0000b22b  Notch2f_Isr                        
-0     0000b307  InitFlash                          
-0     0000b326  HeatFilm_Isr                       
-0     0000b344  F28x_usDelay                       
-0     0000b348  SysCtl_delay                       
-0     0000b34c  RamfuncsRunEnd                     
+0     0000ad72  Fault_FastProtect                  
+0     0000ae11  Notch2f_Isr                        
+0     0000aeed  InitFlash                          
+0     0000af0c  HeatFilm_Isr                       
+0     0000af2a  F28x_usDelay                       
+0     0000af2e  SysCtl_delay                       
+0     0000af32  RamfuncsRunEnd                     
 0     0000c000  sCanMes                            
 0     0000c001  CfgParam                           
 0     0000c040  uMdlAddMes                         
@@ -1322,41 +1321,41 @@ page  address   name
 0     0000d07e  u6FirmwareCode                     
 0     0000d080  g_CtrlBusRef_V                     
 0     0000d082  stDabParam                         
-0     0000d088  Ramp                               
-0     0000d08e  RampTarget                         
-0     0000d094  stDabDuty0                         
-0     0000d09c  stDabDuty1                         
-0     0000d0a4  Bus                                
-0     0000d0c0  stDabPi0                           
-0     0000d0d2  stDabPi1                           
-0     0000d0e4  stFault                            
-0     0000d0e8  stFaultCnt                         
+0     0000d086  Ramp                               
+0     0000d08c  RampTarget                         
+0     0000d092  stDabDuty0                         
+0     0000d09a  stDabDuty1                         
+0     0000d0a2  Bus                                
+0     0000d0b0  stDabPi0                           
+0     0000d0c0  stDabPi1                           
+0     0000d0d0  stFault                            
+0     0000d0d4  stFaultCnt                         
+0     0000d0ec  stBootProto                        
+0     0000d0f8  g_au32DabCanRxLostEvents           
+0     0000d0fc  u16BootSoftwareVerison             
+0     0000d0fd  u16BootSoftwareSubverison          
+0     0000d0fe  u16SoftwareVerison                 
+0     0000d0ff  u16SoftwareSubverison              
 0     0000d100  stUartProto                        
-0     0000d134  stBootProto                        
+0     0000d134  g_u32CanShareTxOk                  
+0     0000d136  g_u32CanShareTxMiss                
 0     0000d140  CpuTimer0                          
 0     0000d148  CpuTimer1                          
 0     0000d150  CpuTimer2                          
-0     0000d158  g_u32CanShareTxOk                  
-0     0000d15a  g_u32CanShareTxMiss                
-0     0000d166  CurShare                           
-0     0000d170  g_au32DabCanRxLostEvents           
-0     0000d174  u16BootSoftwareVerison             
-0     0000d175  u16BootSoftwareSubverison          
-0     0000d176  u16SoftwareVerison                 
-0     0000d177  u16SoftwareSubverison              
-0     0000d198  taskBoxTable                       
-0     0000d1c6  g_stDabIsrState                    
-0     0000d1d4  u32TaskRunTimeMaxUs                
-0     0000d1de  u32TaskRunTimeUs                   
-0     0000d1f6  __TI_enable_exit_profile_output    
-0     0000d1f8  __TI_cleanup_ptr                   
-0     0000d1fa  __TI_dtors_ptr                     
-0     0000d1fe  u32Tick_Count                      
-0     0000d200  g_u16DabCanInitError               
-0     0000d202  pCommSpiRegs                       
-0     0000d204  _lock                              
-0     0000d206  _unlock                            
-0     0000d208  g_u16DabPwmTicks100us              
+0     0000d15a  CurShare                           
+0     0000d184  taskBoxTable                       
+0     0000d1a2  g_stDabIsrState                    
+0     0000d1c2  u32TaskRunTimeMaxUs                
+0     0000d1cc  u32TaskRunTimeUs                   
+0     0000d1e4  __TI_enable_exit_profile_output    
+0     0000d1e6  __TI_cleanup_ptr                   
+0     0000d1e8  __TI_dtors_ptr                     
+0     0000d1ec  u32Tick_Count                      
+0     0000d1ee  g_u16DabCanInitError               
+0     0000d1f0  pCommSpiRegs                       
+0     0000d1f2  _lock                              
+0     0000d1f4  _unlock                            
+0     0000d1f6  g_u16DabPwmTicks100us              
 0     00080000  code_start                         
 0     00084008  stAppInfo                          
 0     00084040  PieVectTableInit                   
@@ -1587,208 +1586,208 @@ page  address   name
 0     00086098  SM_SyncSysCmd                      
 0     00086262  SM_Step_2ms                        
 0     00086262  Task2ms                            
-0     00086314  SM_Standby_100us                   
-0     000863a6  SM_SoftStartTick5ms                
-0     000863b6  SM_Init                            
-0     000863e1  SysXtalOscSel                      
-0     00086401  SysXtalOscSESel                    
-0     00086416  SysIntOsc2Sel                      
-0     0008641d  SysIntOsc1Sel                      
-0     00086426  ServiceDog                         
-0     00086433  ComputeCntrSeedValue               
-0     000864a2  IsPLLValid                         
-0     00086532  InitSysPll                         
-0     00086613  DisableDog                         
-0     00086620  InitPeripheralClocks               
-0     0008669b  InitSysCtrl                        
-0     000866b9  IDLE                               
-0     000866c2  HALT                               
-0     000866d3  DisablePeripheralClocks            
-0     00086713  Ctrl_SetMode                       
-0     00086865  Ctrl_RampInitSwitch                
-0     0008686b  Ctrl_RampInitCold                  
-0     0008686f  Ctrl_RampDone                      
-0     00086979  Ctrl_RampCfg                       
-0     000869d1  Ctrl_Init                          
-0     000869f2  Ctrl_CalcGiven                     
-0     00086a86  Ctrl_StandbyClear                  
-0     00086a86  CurShare_ResetComp                 
-0     00086a97  CurShare_Update1ms                 
-0     00086bca  CurShare_Task_50ms                 
-0     00086bca  Task50ms                           
-0     00086bd4  CurShare_Rx42                      
-0     00086bfc  CurShare_Rx41                      
-0     00086c43  CurShare_ResetPeers                
-0     00086c4a  CurShare_FillTx42                  
-0     00086ca9  CurShare_FillTx41                  
-0     00086d2f  UartProto_SendPacket               
-0     00086e64  UartProto_Task_5ms                 
-0     00086f89  UartProto_RxTask                   
-0     00086fc5  UartProto_Init                     
-0     00086fd8  UartProto_GetPackSum               
-0     00086fdc  UartProto_GetHotCmd                
-0     00086fe0  UartProto_CmdIdleMs                
-0     00086fe6  Update_CanMon                      
-0     00087394  init_Drv_can                       
-0     000873ac  DabCan_TxSucceeded                 
-0     000873c9  DabCan_TxReady                     
-0     0008743b  DabCan_Send                        
-0     0008745a  DabCan_Reinit                      
-0     000874c9  DabCan_Recv                        
-0     00087520  DabCan_InitPoll                    
-0     00087524  DabCan_InitBusy                    
-0     0008752c  DabCan_CheckState                  
-0     00087567  DabCan_CancelTx                    
-0     00087794  DabCmpss_ClearFilterLatchSrc       
-0     000877c2  DabCmpss_ClearFilterLatch          
-0     000877c6  DabCmpss_ClearTrip                 
-0     000877fb  InitChip_CmpssRegs                 
-0     00087808  DabCmpss_ReadTripSrc               
-0     00087823  Adc_CalibCurrZero                  
-0     000878a7  AdcDabFilt1ms                      
-0     00087a83  AdcCtrlInit                        
-0     00087bd2  CanComm_Task_Tx_1ms                
-0     00087c9e  CanComm_Task_Rx                    
-0     00087ca5  CanComm_Task_5ms                   
-0     00087cc1  CanComm_SetLocalAddr               
-0     00087cd8  CanComm_Init                       
-0     00087ce5  TaskSched_TimeBase100us            
-0     00087cff  sCpuTimer2Init                     
-0     00087d43  Sys_TimeSetRTC                     
-0     00087d5f  Sys_TimeSetDate                    
-0     00087d76  Sys_TimeProc                       
-0     00087e16  Sys_TaskRun                        
-0     00087ea1  Sys_TaskInit                       
-0     00087eb4  Sys_TaskFind                       
-0     00087ecb  Sys_TaskDelete                     
-0     00087eeb  Sys_TaskAdd                        
-0     00087f26  Sys_GetTick1ms                     
-0     00087f2a  Sys_GetTick10ms                    
-0     00087f2e  Sys_GetTick100us                   
-0     00087f32  InitChip_DMARegs                   
-0     00088072  InitChip_AdcRegs                   
-0     00088151  GPIO_setQualificationPeriod        
-0     00088171  GPIO_setQualificationMode          
-0     00088197  GPIO_setPinConfig                  
-0     000881c6  GPIO_setPadConfig                  
-0     00088205  GPIO_setInterruptPin               
-0     00088227  GPIO_setDirectionMode              
-0     00088246  GPIO_setControllerCore             
-0     0008826c  GPIO_setAnalogMode                 
-0     00088316  GPIO_getQualificationMode          
-0     0008832f  GPIO_getPadConfig                  
-0     0008835d  GPIO_getDirectionMode              
-0     0008837f  Board_PrepareForBoot               
-0     000883e4  Board_LedToggle                    
-0     00088566  Board_Init                         
-0     00088579  InitGpio                           
-0     000885b7  GPIO_WritePin                      
-0     000885d1  GPIO_SetupXINT5Gpio                
-0     000885d7  GPIO_SetupXINT4Gpio                
-0     000885dd  GPIO_SetupXINT3Gpio                
-0     000885e3  GPIO_SetupXINT2Gpio                
-0     000885e9  GPIO_SetupXINT1Gpio                
-0     000885ef  GPIO_SetupPinOptions               
-0     00088673  GPIO_SetupPinMux                   
-0     000886f4  GPIO_SetupLock                     
-0     00088714  GPIO_ReadPin                       
-0     00088729  ADC_setVREF                        
-0     0008875b  ADC_setPPBTripLimits               
-0     0008879e  ADC_setOffsetTrim                  
-0     000887d8  ADC_setINLTrim                     
-0     00088827  ADC_configureRepeater              
-0     0008885b  ADC_configPPBFilter                
-0     00088888  Interrupt_initVectorTable          
-0     000888a4  Interrupt_initModule               
-0     000888e2  Interrupt_enable                   
-0     0008898b  Interrupt_disable                  
-0     000889d7  OSISREventSend                     
-0     000889e4  Task_TimerCheckIn                  
-0     00088a10  Task_System_AppInit                
-0     00088a82  OSISREventClr                      
-0     00088a90  Task_InvokingProcess               
-0     00088af7  OSEventSend                        
-0     00088b04  OSEventConfirm                     
-0     00088b16  CustomUart_Write                   
-0     00088b41  CustomUart_Task_1ms                
-0     00088b63  CustomUart_RxService               
-0     00088b96  CustomUart_PopRxByte               
-0     00088ba4  CustomUart_Init                    
-0     00088c3f  Notch2f_ParamUpdate5ms             
-0     00088c6b  Notch2f_Init                       
-0     00088c86  InitPeripheralClocks_User          
-0     00088d01  InitChip_SysCtrlRegs               
-0     00088d1f  Software_Version_Handle            
-0     00088d5d  main                               
-0     00088db8  BootProto_ResetRx                  
-0     00088dbe  BootProto_Task_Rx                  
-0     00088dc9  BootProto_Task_1ms                 
-0     00088dfb  BootProto_RxByte                   
-0     00088e46  BootProto_Init                     
-0     00088e4b  InitCpuTimers                      
-0     00088e8c  ConfigCpuTimer                     
-0     00088eb2  AppGpio_SoftRlySet                 
-0     00088ec1  AppGpio_Init                       
-0     00088ec1  AppGpio_PowerSafeOff               
-0     00088edd  AppGpio_SafeOff                    
-0     00088ee2  AppGpio_RelayBusSet                
-0     00088f07  AppGpio_DrvEnSet                   
-0     00088f16  HeatFilm_Init                      
-0     00088f16  HeatFilm_Off                       
-0     00088f28  HeatFilm_SetEnable                 
-0     00088f60  HeatFilm_SetDutyPct                
-0     00088f69  HeatFilm_Task                      
-0     00088f77  DabPwm_MirrorShadowBridge2         
-0     00088fd8  Dab_Ctrl_SessionReset              
-0     00088fe6  Dab_Ctrl_InvBatVoltUpdate          
-0     00088ffb  Dab_Ctrl_DisFfUpdate100us          
-0     0008901f  InitChip_CpuTimerRegs              
-0     0008902e  InitDSP                            
-0     00089060  OSTimerTick                        
-0     000890a1  InitChip_SpiRegs                   
-0     000890d8  sCpuTimer2_ISR                     
-0     0008910b  __TI_decompress_lzss               
-0     0008913b  __TI_auto_init_nobinit_nopinit     
-0     00089166  ASysCtl_setAnalogReferenceVDDA     
-0     0008916f  ASysCtl_setAnalogReferenceInternal 
-0     0008917b  ASysCtl_setAnalogReferenceExternal 
-0     0008918f  C$$EXIT                            
-0     0008918f  abort                              
-0     00089191  exit                               
-0     000891b8  InitPieCtrl                        
-0     000891d7  EnableInterrupts                   
-0     000891e0  init_global_data                   
-0     00089208  Interrupt_nmiHandler               
-0     00089212  Interrupt_illegalOperationHandler  
-0     0008921c  Interrupt_defaultHandler           
-0     00089228  memcpy                             
-0     00089245  Task1ms                            
-0     0008925a  Task1ms_Entry                      
-0     0008925d  _c_int00                           
-0     00089274  InitPieVectTable                   
-0     00089287  Task5ms                            
-0     00089294  Task5ms_Entry                      
-0     00089297  _args_main                         
-0     000892a3  __c28xabi_divu                     
-0     000892a8  __c28xabi_modu                     
-0     000892ae  _register_unlock                   
-0     000892b2  _register_lock                     
-0     000892b6  _nop                               
-0     000892b7  Task100us                          
-0     000892bc  Task100us_Entry                    
-0     000892bf  __TI_decompress_none               
-0     000892cf  memset                             
-0     000892d6  CPUTimer_setEmulationMode          
-0     000892dc  __TI_zero_init                     
-0     000892e2  _system_pre_init                   
-0     000892e4  _system_post_cinit                 
-0     000892e8  RamfuncsLoadStart                  
-0     0008a634  RamfuncsLoadEnd                    
-0     0008a68c  __TI_Handler_Table_Base            
-0     0008a692  __TI_Handler_Table_Limit           
-0     0008a69a  __TI_CINIT_Base                    
-0     0008a6a6  __TI_CINIT_Limit                   
-0     0008a6a6  __TI_CINIT_Warm                    
+0     00086349  SM_Standby_100us                   
+0     000863d8  SM_SoftStartTick5ms                
+0     000863e8  SM_Init                            
+0     00086413  SysXtalOscSel                      
+0     00086433  SysXtalOscSESel                    
+0     00086448  SysIntOsc2Sel                      
+0     0008644f  SysIntOsc1Sel                      
+0     00086458  ServiceDog                         
+0     00086465  ComputeCntrSeedValue               
+0     000864d4  IsPLLValid                         
+0     00086564  InitSysPll                         
+0     00086645  DisableDog                         
+0     00086652  InitPeripheralClocks               
+0     000866cd  InitSysCtrl                        
+0     000866eb  IDLE                               
+0     000866f4  HALT                               
+0     00086705  DisablePeripheralClocks            
+0     00086742  Ctrl_SetMode                       
+0     00086890  Ctrl_RampInitSwitch                
+0     00086896  Ctrl_RampInitCold                  
+0     0008689a  Ctrl_RampDone                      
+0     000869a4  Ctrl_RampCfg                       
+0     000869fc  Ctrl_Init                          
+0     00086a1d  Ctrl_CalcGiven                     
+0     00086ab1  Ctrl_StandbyClear                  
+0     00086ab1  CurShare_ResetComp                 
+0     00086ac2  CurShare_Update1ms                 
+0     00086bf5  CurShare_Task_50ms                 
+0     00086bf5  Task50ms                           
+0     00086bff  CurShare_Rx42                      
+0     00086c27  CurShare_Rx41                      
+0     00086c6e  CurShare_ResetPeers                
+0     00086c75  CurShare_FillTx42                  
+0     00086cd4  CurShare_FillTx41                  
+0     00086d5a  UartProto_SendPacket               
+0     00086e8f  UartProto_Task_5ms                 
+0     00086fb4  UartProto_RxTask                   
+0     00086ff0  UartProto_Init                     
+0     00087003  UartProto_GetPackSum               
+0     00087007  UartProto_GetHotCmd                
+0     0008700b  UartProto_CmdIdleMs                
+0     000870ee  init_Drv_can                       
+0     00087106  DabCan_TxSucceeded                 
+0     00087123  DabCan_TxReady                     
+0     00087195  DabCan_Send                        
+0     000871b4  DabCan_Reinit                      
+0     00087223  DabCan_Recv                        
+0     0008727a  DabCan_InitPoll                    
+0     0008727e  DabCan_InitBusy                    
+0     00087286  DabCan_CheckState                  
+0     000872c1  DabCan_CancelTx                    
+0     000872de  Update_CanMon                      
+0     00087798  DabCmpss_ClearFilterLatchSrc       
+0     000877c6  DabCmpss_ClearFilterLatch          
+0     000877ca  DabCmpss_ClearTrip                 
+0     000877ff  InitChip_CmpssRegs                 
+0     0008780c  DabCmpss_ReadTripSrc               
+0     00087827  Adc_CalibCurrZero                  
+0     000878ab  AdcDabFilt1ms                      
+0     00087a87  AdcCtrlInit                        
+0     00087bd6  CanComm_Task_Tx_1ms                
+0     00087ca2  CanComm_Task_Rx                    
+0     00087ca9  CanComm_Task_5ms                   
+0     00087cc5  CanComm_SetLocalAddr               
+0     00087cdc  CanComm_Init                       
+0     00087ce9  TaskSched_TimeBase100us            
+0     00087d03  sCpuTimer2Init                     
+0     00087d47  Sys_TimeSetRTC                     
+0     00087d63  Sys_TimeSetDate                    
+0     00087d7a  Sys_TimeProc                       
+0     00087e1a  Sys_TaskRun                        
+0     00087ea5  Sys_TaskInit                       
+0     00087eb8  Sys_TaskFind                       
+0     00087ecf  Sys_TaskDelete                     
+0     00087eef  Sys_TaskAdd                        
+0     00087f2a  Sys_GetTick1ms                     
+0     00087f2e  Sys_GetTick10ms                    
+0     00087f32  Sys_GetTick100us                   
+0     00087f36  InitChip_DMARegs                   
+0     00088076  InitChip_AdcRegs                   
+0     00088155  GPIO_setQualificationPeriod        
+0     00088175  GPIO_setQualificationMode          
+0     0008819b  GPIO_setPinConfig                  
+0     000881ca  GPIO_setPadConfig                  
+0     00088209  GPIO_setInterruptPin               
+0     0008822b  GPIO_setDirectionMode              
+0     0008824a  GPIO_setControllerCore             
+0     00088270  GPIO_setAnalogMode                 
+0     0008831a  GPIO_getQualificationMode          
+0     00088333  GPIO_getPadConfig                  
+0     00088361  GPIO_getDirectionMode              
+0     00088383  Board_PrepareForBoot               
+0     000883e8  Board_LedToggle                    
+0     0008856a  Board_Init                         
+0     0008857d  InitGpio                           
+0     000885bb  GPIO_WritePin                      
+0     000885d5  GPIO_SetupXINT5Gpio                
+0     000885db  GPIO_SetupXINT4Gpio                
+0     000885e1  GPIO_SetupXINT3Gpio                
+0     000885e7  GPIO_SetupXINT2Gpio                
+0     000885ed  GPIO_SetupXINT1Gpio                
+0     000885f3  GPIO_SetupPinOptions               
+0     00088677  GPIO_SetupPinMux                   
+0     000886f8  GPIO_SetupLock                     
+0     00088718  GPIO_ReadPin                       
+0     0008872d  ADC_setVREF                        
+0     0008875f  ADC_setPPBTripLimits               
+0     000887a2  ADC_setOffsetTrim                  
+0     000887dc  ADC_setINLTrim                     
+0     0008882b  ADC_configureRepeater              
+0     0008885f  ADC_configPPBFilter                
+0     0008888c  Interrupt_initVectorTable          
+0     000888a8  Interrupt_initModule               
+0     000888e6  Interrupt_enable                   
+0     0008898f  Interrupt_disable                  
+0     000889db  OSISREventSend                     
+0     000889e8  Task_TimerCheckIn                  
+0     00088a14  Task_System_AppInit                
+0     00088a86  OSISREventClr                      
+0     00088a94  Task_InvokingProcess               
+0     00088afb  OSEventSend                        
+0     00088b08  OSEventConfirm                     
+0     00088b1a  CustomUart_Write                   
+0     00088b45  CustomUart_Task_1ms                
+0     00088b67  CustomUart_RxService               
+0     00088b9a  CustomUart_PopRxByte               
+0     00088ba8  CustomUart_Init                    
+0     00088c43  Notch2f_ParamUpdate5ms             
+0     00088c6f  Notch2f_Init                       
+0     00088c8a  InitPeripheralClocks_User          
+0     00088d05  InitChip_SysCtrlRegs               
+0     00088d23  Software_Version_Handle            
+0     00088d61  main                               
+0     00088dbc  BootProto_ResetRx                  
+0     00088dc2  BootProto_Task_Rx                  
+0     00088dcd  BootProto_Task_1ms                 
+0     00088dff  BootProto_RxByte                   
+0     00088e4a  BootProto_Init                     
+0     00088e4f  InitCpuTimers                      
+0     00088e90  ConfigCpuTimer                     
+0     00088eb6  AppGpio_SoftRlySet                 
+0     00088ec5  AppGpio_Init                       
+0     00088ec5  AppGpio_PowerSafeOff               
+0     00088ee1  AppGpio_SafeOff                    
+0     00088ee6  AppGpio_RelayBusSet                
+0     00088f0b  AppGpio_DrvEnSet                   
+0     00088f1a  HeatFilm_Init                      
+0     00088f1a  HeatFilm_Off                       
+0     00088f2c  HeatFilm_SetEnable                 
+0     00088f64  HeatFilm_SetDutyPct                
+0     00088f6d  HeatFilm_Task                      
+0     00088f7b  DabPwm_MirrorShadowBridge2         
+0     00088fdc  Dab_Ctrl_SessionReset              
+0     00088fea  Dab_Ctrl_InvBatVoltUpdate          
+0     00088fff  Dab_Ctrl_DisFfUpdate100us          
+0     0008902e  InitChip_CpuTimerRegs              
+0     0008903d  InitDSP                            
+0     0008906f  OSTimerTick                        
+0     000890b0  InitChip_SpiRegs                   
+0     000890e7  sCpuTimer2_ISR                     
+0     0008911a  __TI_decompress_lzss               
+0     0008914a  __TI_auto_init_nobinit_nopinit     
+0     00089175  ASysCtl_setAnalogReferenceVDDA     
+0     0008917e  ASysCtl_setAnalogReferenceInternal 
+0     0008918a  ASysCtl_setAnalogReferenceExternal 
+0     0008919e  C$$EXIT                            
+0     0008919e  abort                              
+0     000891a0  exit                               
+0     000891c7  InitPieCtrl                        
+0     000891e6  EnableInterrupts                   
+0     000891ef  init_global_data                   
+0     00089217  Interrupt_nmiHandler               
+0     00089221  Interrupt_illegalOperationHandler  
+0     0008922b  Interrupt_defaultHandler           
+0     00089237  memcpy                             
+0     00089254  Task1ms                            
+0     00089269  Task1ms_Entry                      
+0     0008926c  _c_int00                           
+0     00089283  InitPieVectTable                   
+0     00089296  Task5ms                            
+0     000892a3  Task5ms_Entry                      
+0     000892a6  _args_main                         
+0     000892b2  __c28xabi_divu                     
+0     000892b7  __c28xabi_modu                     
+0     000892bd  _register_unlock                   
+0     000892c1  _register_lock                     
+0     000892c5  _nop                               
+0     000892c6  Task100us                          
+0     000892cb  Task100us_Entry                    
+0     000892ce  __TI_decompress_none               
+0     000892de  memset                             
+0     000892e5  CPUTimer_setEmulationMode          
+0     000892eb  __TI_zero_init                     
+0     000892f1  _system_pre_init                   
+0     000892f3  _system_post_cinit                 
+0     000892f8  RamfuncsLoadStart                  
+0     0008a22a  RamfuncsLoadEnd                    
+0     0008a284  __TI_Handler_Table_Base            
+0     0008a28a  __TI_Handler_Table_Limit           
+0     0008a292  __TI_CINIT_Base                    
+0     0008a29e  __TI_CINIT_Limit                   
+0     0008a29e  __TI_CINIT_Warm                    
 1     00000c00  CpuTimer0Regs                      
 1     00000c08  CpuTimer1Regs                      
 1     00000c10  CpuTimer2Regs                      
@@ -1825,8 +1824,8 @@ abs   00000000  Cla1ConstLoadSize
 abs   00000000  Cla1ProgLoadSize                   
 abs   00000128  FromAppRequestFlag                 
 abs   00000200  __TI_STACK_SIZE                    
-abs   0000134c  RamfuncsLoadSize                   
-abs   0000134c  RamfuncsRunSize                    
+abs   00000f32  RamfuncsLoadSize                   
+abs   00000f32  RamfuncsRunSize                    
 abs   ffffffff  __TI_pprof_out_hndl                
 abs   ffffffff  __TI_prof_data_size                
 abs   ffffffff  __TI_prof_data_start               
