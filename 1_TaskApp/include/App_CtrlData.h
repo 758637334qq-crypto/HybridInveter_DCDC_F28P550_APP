@@ -66,6 +66,7 @@ typedef struct
  * 电流内环（每路一份）
  * Δu = K1·e(k) − K2·e(k−1)，K1 = Kp + Ki·Ts，K2 = Kp，结果累加在 f32Out。
  * 占空比前馈叠在电流环输出上：放电为模型反解 u_ff，充电为开方 d_ff。发波占空比在 ST_DAB_DUTY。
+ * 放电 PI 输出上限不随路/随工况变化，固定在宏 DAB_DIS_U_MAX（App_DabModel.h），本结构体不存。
  *============================================================================*/
 typedef struct
 {
@@ -73,7 +74,6 @@ typedef struct
     float f32Err1;                         /* 上一拍误差 */
 
     float f32Out;                          /* 充电：电流修正(A)；放电：增量 PI 校正 */
-    float f32OutMax;                       /* 放电内环输出上限 */
 
     float f32K1;                           /* Kp + Ki·Ts */
     float f32K2;                           /* Kp */

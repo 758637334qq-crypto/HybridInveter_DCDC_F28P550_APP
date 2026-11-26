@@ -4,7 +4,7 @@
  * 模块划分（自下而上）：
  *   ① 外环     Dab_Ctrl_BusVoltLoop                 电压环 → 总电流给定 Bus.f32Ref
  *   ② 放电内环 Dab_Ctrl_DisFfCalc / DisGainSched / DisCurrLoop / DisDutyMap
- *   ③ 充电内环 Dab_Ctrl_SrStateUpdate / SrDutyCalc / ChgCurrLoop
+ *   ③ 充电内环 Dab_Ctrl_SrStateUpdate / ChgPiStep / ChgCurrLoop
  *   ④ 顶层     Dab_Ctrl_Loop                        工况快照 → 打嗝/封波 → 内外环
  *   ⑤ 发波     Dab_Pwm_ChgUpdate / Dab_Pwm_DisUpdate 占空比 → CMP / AQ
  *   ⑥ 中断     EPWM10_ISR                             采样 → 保护 → 控制 → 发波 → 应答
@@ -30,6 +30,8 @@ typedef char DabChgDlowBelowDtop_t[(DAB_CHG_D_LOW_MAX_MILLI < DAB_CHG_D_TOP_MILL
 typedef char DabChgCapOnAboveOff_t[
     ((DAB_CHARGE_CAP_OFF_MILLI > 0U) &&
      (DAB_CHARGE_CAP_OFF_MILLI < DAB_CHARGE_CAP_ON_MILLI)) ? 1 : -1];
+/* 放电内环 Δu 上轨 stepMax≥STEP_MIN，必须 >0，否则 DAB_SAT(Δu,−STEP_DOWN,stepMax) 上下轨倒置。 */
+typedef char DabDutyStepMinPositive_t[(DAB_DUTY_STEP_MIN_MILLI > 0U) ? 1 : -1];
 
 /*==============================================================================
  * 全局可变状态：全文件唯一一块，字段说明见 Interrupt_CtrlDab.h
@@ -222,75 +224,200 @@ static inline void Dab_Ctrl_BusVoltLoop(float f32Vo, float f32RefMin, Uint16 u16
  * ② 放电内环
  *============================================================================*/
 
-/* 放电模型前馈：按单桥母线电流给定反算 u，与 Dab_Ctrl_DisDutyMap 配套。 */
+/**
+ * @brief DAB 放电模式非线性模型前馈计算函数 (Model-Based Feedforward)
+ * @param f32Iref 单个 DAB 桥的目标输出电流给定值 (单位: A)
+ * @return float  虚拟总控制油门 u ∈ [0.0f, 1.0f]
+ *                - 0.00 ~ 0.50   : HV 固定 0.45，纯调低压侧脉宽占空比 b (0.10 ~ 0.44，降压轻载)
+ *                - 0.50 ~ 0.6111 : LV 锁死 0.44，HV 从 0.45 扩宽至 0.50 (q=0 过渡段)
+ *                - 0.6111 ~ 1.00 : LV 锁死 0.44，HV 超过 0.50 产生移相重叠量 q = HvDuty - 0.50 (升压或降压重载)
+ */
 #pragma FUNC_ALWAYS_INLINE(Dab_Ctrl_DisFfCalc);
 static inline float Dab_Ctrl_DisFfCalc(float f32Iref)
 {
+    /* =========================================================================
+     * 0. 变量读取与安全防呆拦截
+     * ========================================================================= */
+
+    /* 电池折算到高压母线侧的等效电压倒数：1 / E = 1 / (n * Vbat)
+     * 【大白话】：n 是变压器匝比。比如电池 50V，匝比 8，折算过去就是 E = 400V。
+     * 【优化技巧】：外部慢速任务预先算好倒数，中断内用乘法代替除法，节省 DSP 时钟周期。 */
     const float f32InvE = g_stDabIsrState.f32DisInvE;
+
+    /* 电压落差比：R = Vref / E = 设定母线电压 / 电池折算电压
+     * - R >= 1.0：目标母线比电池高，水往高处抽 (升压 Boost 模式)
+     * - R <  1.0：目标母线比电池低，水往低处放 (降压 Buck 模式)
+     * 【工程设计】：采用母线给定值 Vref 计算，不受实测母线开关纹波干扰，前馈输出更平稳。 */
     const float f32R    = g_stDabIsrState.f32DisRatio;
 
+    /* 【1. 异常与极小电流拦截】
+     * 规则：电池没电(InvE <= 0) 或 电流给定连 0.05A 都不到(芝麻大点流)，直接关前馈输出 0.0f。
+     * 防御机制：采用 !(A && B) 写法，若浮点数溢出变为 NaN，也能被安全抓捕直接返回 0。 */
     if (!(f32InvE > 0.0f && f32Iref > DAB_DIS_FF_IREF_MIN))
     {
         return 0.0f;
     }
 
-    /* 单桥给定从 0.05 A 到 0.25 A 时，前馈上限从 0 放宽到 1。 */
-    const float f32FfMax   = __fmin(1.0f, (f32Iref - DAB_DIS_FF_IREF_MIN) * DAB_DIS_FF_START_SPAN_INV);
-    const float f32JPerAmp = DAB_DIS_FF_K * f32InvE;
-    const float f32J       = f32Iref * f32JPerAmp;
-    float f32U = DAB_DIS_FF_U_Q0;
-    float f32Q;
 
+    /* =========================================================================
+     * 1. 起步防蹿车软上限 & 标幺化电流 J 计算
+     * ========================================================================= */
+
+    /* 【公式】：FfMax = min( DAB_DIS_U_MAX, (Iref - 0.05A) * (1 / 0.20A) )
+     * 【大白话】：升压区移相段默认从 u = DAB_DIS_FF_U_Q0 (≈0.6111) 起跑。如果给定刚到 0.06A 就直接给 0.6111 的大油门，
+     * 车子会猛蹿一下（母线电压过冲）。所以在单桥 0.05A ~ 0.25A 这段极窄起步区间内，
+     * 给前馈设一个随电流线性放宽的软上限 FfMax (0.0 -> DAB_DIS_U_MAX)。前馈不足部分由 PI 柔和垫上。 */
+    const float f32FfMax   = __fmin(DAB_DIS_U_MAX, (f32Iref - DAB_DIS_FF_IREF_MIN) * DAB_DIS_FF_START_SPAN_INV);
+
+    /* 【公式：无量纲比例系数】 JPerAmp = K / E = (0.8 * fs * Lk) / E
+     * 常数 DAB_DIS_FF_K = 0.8 * fs(60kHz) * Lk(35uH) = 1.68（按标称漏感 -20% 留裕量，标称稳态约承担 80% 电流，余量由 PI 修平） */
+    const float f32JPerAmp = DAB_DIS_FF_K * f32InvE;
+
+    /* 【公式：将物理安培电流换算为无量纲纯力气 J】 J = Iref * K / E = Iref * (0.8 * fs * Lk) / E
+     * 物理意义：不管实际是几百伏、几十安，统一换算成变压器电感储能的无量纲数值 J。 */
+    const float f32J       = f32Iref * f32JPerAmp;
+
+    /* 虚拟总油门 u：初始默认卡在 q=0 移相起点 DAB_DIS_FF_U_Q0 (≈0.6111，对应 HV=0.50)。
+     * 升压模式或降压大重载直接在此基础上叠加推力 q；降压轻载则会从实际脉宽重新起步。 */
+    float f32U = DAB_DIS_FF_U_Q0;
+    float f32Q; /* 水泵加压推力分量 q (两侧移相角) */
+
+
+    /* =========================================================================
+     * 2. 分支一：往高处抽水 (升压模式: R >= 1.0)
+     * ========================================================================= */
     if (f32R >= 1.0f)
     {
-        /* 升压区：轻载开方，重载按分界点切线计算。 */
+        /* 升压工况下，低压侧脉宽全程开到最大固定死 (b = B = DAB_DIS_FF_B = 0.44)，
+         * 纯靠加大水泵推力 q (移相角) 来控制输出电流。 */
+
+        /* 计算升压相对压差比例：ΔR = R - 1 */
         const float f32Dr = f32R - 1.0f;
+
+        /* 【公式：断续三角波(DCM) 与 连续梯形波(CCM) 的物理分界电流 J1】
+         * 推导公式：J1 = B^2 * (R - 1) / R^2
+         * - 当 J <= J1 时：水流是一瓢一瓢泼过去的，每次电感电流都归零（轻载断续 DCM）；
+         * - 当 J >  J1 时：水流连成一条线，电感电流再也不归零（重载连续 CCM）。 */
         const float f32J1 = __divf32(DAB_DIS_FF_B2 * f32Dr, f32R * f32R);
 
         if (f32J <= f32J1)
         {
+            /* --- 2.1 升压轻中载 (DCM 三角波模式)：物理精确开方解 ---
+             * 【物理公式】：DCM 下传输电流与推力平方成正比：J = q^2 / (R - 1)
+             * 【反推求 q】：两边直接开平方根：q = sqrt( J * (R - 1) ) */
             f32Q = __sqrt(f32J * f32Dr);
         }
         else
         {
+            /* --- 2.2 升压重载 (CCM 梯形波模式)：一阶切线光滑近似 (C1 连续) ---
+             * 【为什么不用精确解？】：CCM 真实方程是一元二次方程求根，计算耗时且有负数开方风险。
+             * 【切线公式推导】：在分界点 J1 处，沿着上面 DCM 抛物线末尾顺延作一条"切线滑梯"：
+             *   1. 在 J = J1 处的函数值：q(J1) = B * ΔR / R
+             *   2. 在 J = J1 处的切线斜率：dq/dJ = R / (2 * B)
+             *   3. 点斜式直线方程：q(J) = q(J1) + (dq/dJ) * (J - J1)
+             * 化简后得到本行代码：q = [B * (R - 1) / (2 * R)] + [R / (2 * B)] * J
+             * 【优点】：仅用 1 次加法和 1 次乘法，计算极快！且在 J=J1 切换点处，数值与斜率
+             *          100% 平滑衔接（C1 连续），模式切换无任何 PWM 抖动与母线冲击！ */
             f32Q = __divf32(DAB_DIS_FF_B * f32Dr, 2.0f * f32R) + f32R * f32J * DAB_DIS_FF_INV_2B;
         }
     }
+
+
+    /* =========================================================================
+     * 3. 分支二：往低处放水 (降压模式: R < 1.0)
+     * ========================================================================= */
     else
     {
+        /* 降压工况下：
+         * 小电流时：推力 q = 0，单靠拧大阀门 b 控制（0.00 ~ 0.50 油门段）；
+         * 大电流时：阀门 b 开到最大、HV 扩宽到 0.50 后，启动移相推力 q 助力（0.6111 ~ 1.00 油门段）。 */
+
+        /* 【公式：纯开阀门能管用的最大极限电流分界点 J0】
+         * 推导公式：J0 = 2 * (1 - R) * B^2 / (1 + R)
+         * 物理意义：不加任何移相推力 (q=0)，把脉宽 b 拉满到最大值 B 时所能输出的最大极限电流。 */
         const float f32J0 = __divf32(2.0f * (1.0f - f32R) * DAB_DIS_FF_B2, 1.0f + f32R);
 
+        /* 判断：当前电流是否处于【纯开阀门段】或者【分界点 J0 后的平滑过渡带】 */
         if (f32J < (1.0f + DAB_DIS_FF_BLEND_WIDTH) * f32J0)
         {
+            /* 【安全紧箍咒：阀门最大开度限制 BMax】
+             * 【公式】：BMax = min( B, 0.25 * (1 + R) - 0.025 )
+             * 【大白话】：在深降压 (R < 0.86) 时，为了保证软开关 (ZVS) 并不发生无功反冲砸管，
+             * 阀门不敢开到标称最大值 B = 0.44，必须随电压比 R 线性收紧上限（如 R=0.70 时限制在 0.40）。 */
             const float f32BMax = __fmin(DAB_DIS_FF_B, 0.25f * (1.0f + f32R) - 0.025f);
-            float f32B = f32BMax;
+            float f32B = f32BMax; /* 默认先假定脉宽达到最大限位 */
 
+            /* --- 3.1 纯开阀门轻载段 (J < J0) --- */
             if (f32J < f32J0)
             {
+                /* 计算当前电流需求占分界能力 J0 的比例：K = J / J0 ∈ [0, 1) */
                 const float f32K = __divf32(f32J, f32J0);
+
+                /* 【公式：反推物理阀门开度 b】 b = min( B * sqrt(K), BMax )
+                 * 物理原理：轻载下输出电流与脉宽平方成正比 (J ∝ b^2)，反推脉宽需开根号！ */
                 f32B = __fmin(DAB_DIS_FF_B * __sqrt(f32K), f32BMax);
             }
+            /* 【线性映射】：将物理脉宽 b 转换为前半截虚拟油门 u (0.0 ~ 0.50)
+             * 公式：u = (b - b_min) * 斜率倒数 */
             f32U = (f32B - DAB_DUTY_LV_MIN) * DAB_LV_INV_SLOPE;
+
+            /* 如果完全处于 J <= J0 纯脉宽段，前馈计算直接搞定，安全限幅后返回！ */
             if (f32J <= f32J0)
             {
                 return DAB_SAT(f32U, 0.0f, f32FfMax);
             }
 
-            /* J0 后用三次权重接回移相段，接近单桥额定给定时按余量缩短过渡。 */
+            /* --- 3.2 J0 之后的平滑消除断层过渡段 (J0 < J < 1.2*J0) ---
+             * 【为什么要这一段？】：纯调脉宽段终点 b = 0.44 对应 u = 0.500（此时 HV 仍为 0.45），
+             *  而启动移相的起点 DAB_DIS_FF_U_Q0 = 0.6111（对应 HV = 0.50、q = 0），两段之间天然存在
+             *  Δu ≈ 0.111 的 HV 扩宽断层；若 R < 0.86 触发 BMax 限幅，前半段终点低于 0.500，断层还会进一步扩大。
+             * 【平滑算法】：在 J0 之后的过渡带内，用三次 S 型平滑曲线把 f32U → DAB_DIS_FF_U_Q0 的跨度平缓接上！ */
+
+            /* 计算分界点距离单桥硬件最大电流极限还剩多少行程：Room = I_limit - J0 */
             const float f32Room = DAB_CURR_LIMIT * DAB_CURR_PER_BRIDGE * f32JPerAmp - f32J0;
+
+            /* 自适应计算过渡带宽度 Width：
+             * 【公式】：Width = min( 0.2 * J0, max( 0.40A 对应力气, Room ) )
+             * 大白话：平时给 20%*J0 宽度平滑过渡；快到极限电流时按余量缩短，但底线保底留 0.40A 宽度防抖。 */
             const float f32Width = __fmin(DAB_DIS_FF_BLEND_WIDTH * f32J0,
                                          __fmax(DAB_DIS_FF_HI_MIN_A * f32JPerAmp, f32Room));
+
+            /* 归一化过渡进度：t = (J - J0) / Width ∈ [0.0, 1.0] */
             const float f32T = __fmin(1.0f, __divf32(f32J - f32J0, f32Width));
+
+            /* 【公式：三次 Smoothstep 平滑曲线权重】 Weight(t) = 3*t^2 - 2*t^3
+             * 【数学之美】：导数 dWeight/dt = 6*t*(1 - t)，在起点 t=0 和终点 t=1 处导数严格归零！
+             * 像高铁进出站一样极度平缓，消灭增益跳变引起的极限环抖动。 */
             const float f32Weight = f32T * f32T * (3.0f - 2.0f * f32T);
+
+            /* 将前半段终点平缓过渡到移相起点 DAB_DIS_FF_U_Q0 (≈0.6111)：u = u + Weight * (U_Q0 - u) */
             f32U += f32Weight * (DAB_DIS_FF_U_Q0 - f32U);
         }
 
+        /* --- 3.3 降压大重载水泵推力计算 (J > J0) ---
+         * 阀门开满后不够用的超额电流部分 (J - J0)，全部依靠叠加移相推力 q 补齐
+         * 【切线公式推导】：q = [(1 + R) / (4 * R * B)] * (J - J0) */
         f32Q = __divf32((1.0f + f32R) * (f32J - f32J0), 4.0f * f32R * DAB_DIS_FF_B);
     }
 
-    /* 移相量按最大功率点限幅，再叠加到 u。 */
+
+    /* =========================================================================
+     * 4. 最大功率点 (MPP) 机械限位与总油门合成输出
+     * ========================================================================= */
+
+    /* 【核心物理保命铁律：防止油门踩爆导致正反馈炸机！】
+     * 物理原理：DAB 传输功率关于移相角 q 是一条正弦馒头形曲线。
+     * 越过最高点（最大功率点 MPP）之后，继续加大推力 q，输出电流反而会下降！
+     * 控制器要是发现电流不够继续死命踩油门，就会陷入"油门越大出力越小"的恶性死循环，瞬间烧管炸机！
+     * 【公式：最大安全推力上限】 q_max = (2 * R * B) / (1 + 2 * R)
+     * 代码对移相量 q 施加物理绝对死卡：q 绝不准翻过山头！ */
     f32Q = __fmin(f32Q, __divf32(2.0f * f32R * DAB_DIS_FF_B, 1.0f + 2.0f * f32R));
+
+    /* 【总油门合成】：
+     * 在基础油门 f32U (稳态为 U_Q0 ≈ 0.6111，降压过渡带内平滑爬升至 0.6111) 之上，叠加移相分量：u = u + q / DAB_HV_SLOPE */
     f32U += f32Q * DAB_HV_INV_SLOPE;
+
+    /* 最终安全饱和限幅：将总油门死死约束在 [0.0f, 当前允许的最大软上限 f32FfMax] 范围内输出！ */
     return DAB_SAT(f32U, 0.0f, f32FfMax);
 }
 
@@ -305,69 +432,98 @@ static inline float Dab_Ctrl_DisGainSched(float f32DutyU)
     return DAB_SCHED_S4_SCALE;       /* HV 段 */
 }
 
-/* 放电单路电流环
+/**
+ * @brief 放电单桥电流环：算本拍该发多大油门 Duty
  *
- * 符号约定：f32Curr 带符号采样，放电时为正；Bus.f32Ref 放电需求为正，
- * f32Ref = 0.5×Ref 恒为正。
- *
- * 增量式 PI 输出归一化 u，再叠前馈得到本桥占空比。
- * 给定撤销 / 甩载 / NaN 由上层打嗝休眠门单拍统一清零，本函数只处理正给定；
- * 恰好为零的给定在前馈软起下系数为 0，PI 增量被映射死区拦截，无积累风险。 */
+ * 流水线：模型先给一大块前馈 Ff → PI 再微调 Out → Duty = Out + Ff。
+ * 两桥各调一次；电流给定恒为正（放电），单桥目标 = 总给定 × 0.5。
+ * 关波 / 甩载 / NaN 由上层打嗝门一拍清零（含 f32DutyFf），进来后只处理正给定。
+ */
 #pragma FUNC_ALWAYS_INLINE(Dab_Ctrl_DisCurrLoop);
 static inline void Dab_Ctrl_DisCurrLoop(ST_DAB_PI *pstPi, ST_DAB_DUTY *pstDuty,
                                         float f32Current, float f32DffBase)
 {
-    const float f32OutMax = pstPi->f32OutMax;               /* 缓存，避免重复读内存 */
-    const float f32Duty   = pstDuty->f32Duty;               /* 本拍开始时的占空比 */
-    const float f32Ref    = DAB_CURR_PER_BRIDGE * Bus.f32Ref;
-    float f32Err;
-    float f32DeltaPi;
-    float f32StepMax;
-    float f32Ff;
-    float f32OutHi;
+    /* =========================================================================
+     * 0. 本拍差多少电流
+     * ========================================================================= */
 
-    pstPi->f32Ref = f32Ref;
+    /* 上一拍已发出去的油门，后面用来算“离顶还剩多少” */
+    const float f32Duty    = pstDuty->f32Duty;
 
-    /* 上坡限步：剩余行程 / 5，最低 DAB_DUTY_STEP_MIN；
-     * 下坡用固定步长（甩载不等待），刻意非对称。 */
-    f32StepMax = __fmax((f32OutMax - f32Duty) * DAB_DUTY_MAX_STEPS_INV, DAB_DUTY_STEP_MIN);
+    /* 两桥一人一半：单桥目标电流 = 0.5 × Bus.f32Ref */
+    const float f32Ref     = DAB_CURR_PER_BRIDGE * Bus.f32Ref;
 
-    /* ▲ 前馈缓入（零新增内存，复用休眠已清零的 f32DutyFf）：
-     * 上升每拍最多加 f32StepMax（唤醒首拍最多 0.20，约 5 拍爬满），下降当拍直跟。 */
-    f32Ff            = __fmin(f32DffBase, pstPi->f32DutyFf + f32StepMax);
-    pstPi->f32DutyFf = f32Ff;
+    /* 【公式】Err = Ref − 实测
+     * >0：电流不够，要加油门；<0：超了，要收油门 */
+    const float f32Err     = f32Ref - f32Current;
 
-    /* 增量 PI × 调度倍率：段③映射斜率变小、环路增益下降，用斜率反比补回。
-     * 只缩放 PI 增量，前馈、映射、限步都不参与。 */
-    f32Err     = f32Ref - f32Current;
-    f32DeltaPi = pstPi->f32K1 * f32Err - pstPi->f32K2 * pstPi->f32Err1;
-    f32DeltaPi *= Dab_Ctrl_DisGainSched(f32Duty);
 
-    if (f32DeltaPi > 0.0f)
-    {
-        f32DeltaPi = __fmin(f32DeltaPi, f32StepMax);
-    }
-    else
-    {
-        f32DeltaPi = __fmax(f32DeltaPi, -DAB_DUTY_STEP_DOWN);
-    }
+    /* =========================================================================
+     * 1. 这一拍最多允许走多远 + 前馈怎么跟
+     * ========================================================================= */
 
-    /* 抗饱和：在占空比上限仍要增、在 0 仍要减时不积分 */
-    if (((f32Duty < f32OutMax) || (f32DeltaPi <= 0.0f)) &&
-        ((f32Duty > 0.0f) || (f32DeltaPi >= 0.0f)))
-    {
-        pstPi->f32Out += f32DeltaPi;
-    }
+    /* 【公式】StepMax = max( (1 − Duty) / 5 , 0.1 )
+     * 离满油门还远时，一步最多走剩余路程的 1/5；快到顶时步子变小，但最少也给 0.1。
+     * 注意：Duty>0.5 时 (1−Duty)/5 已经 < 0.1，后半段其实一直踩在 0.1 地板上。 */
+    const float f32StepMax = __fmax((DAB_DIS_U_MAX - f32Duty) * DAB_DUTY_MAX_STEPS_INV, DAB_DUTY_STEP_MIN);
 
-    /* 饱和标志在 Out 夹位点直接判定：若先夹到 OutMax-Ff 再回加 Ff，
-     * 浮点 1ULP 漂移会让 Duty ≥ OutMax 漏判一拍。 */
-    f32OutHi          = f32OutMax - f32Ff;
-    pstPi->u16DutySat = (pstPi->f32Out >= f32OutHi) ? 1U : 0U;
-    pstPi->f32Out     = DAB_SAT(pstPi->f32Out, -f32Ff, f32OutHi);
-    pstPi->f32Err1    = f32Err;
+    /* 【公式】FfRaw = min( 模型理想值 , 上一拍 Ff + StepMax )
+     * 往上加：每拍最多涨 StepMax，避免刚醒来前馈猛跳把电流冲高；
+     * 往下砍：模型一降就立刻跟，甩载不等待。 */
+    const float f32FfRaw   = __fmin(f32DffBase, pstPi->f32DutyFf + f32StepMax);
 
-    /* 位置式叠前馈，输出本桥占空比 */
-    pstDuty->f32Duty = DAB_SAT(pstPi->f32Out + f32Ff, 0.0f, f32OutMax);
+    /* 再卡死在 [0, 1]。DAB_SAT 会把入参算两遍，所以先落到 f32FfRaw 再送进去。 */
+    const float f32Ff      = DAB_SAT(f32FfRaw, 0.0f, DAB_DIS_U_MAX);
+
+
+    /* =========================================================================
+     * 2. PI 算出本拍要加减多少油门
+     * ========================================================================= */
+
+    /* 【公式】RawPi = (K1×本拍误差 − K2×上拍误差) × 段增益
+     * 只算“这一拍相对上一拍该动多少”，不重新累一大坨。
+     * K1=Kp+Ki·Ts，K2=Kp；DisGainSched 看当前 Duty 在前半段还是后半段，
+     * 后半段物理增益变钝时把系数放大，两边响应速度尽量差不多。 */
+    const float f32RawPi   = (pstPi->f32K1 * f32Err - pstPi->f32K2 * pstPi->f32Err1)
+                             * Dab_Ctrl_DisGainSched(f32Duty);
+
+    /* 【公式】Δu = 把 RawPi 夹到 [−0.2 , +StepMax]
+     * 加油门：一步不能超过 StepMax；收油门：允许一拍最多掉 0.2，退得更快。 */
+    const float f32DeltaPi = DAB_SAT(f32RawPi, -DAB_DUTY_STEP_DOWN, f32StepMax);
+
+
+    /* =========================================================================
+     * 3. PI 还能加到哪 —— 前馈占掉的空间要让出来
+     * ========================================================================= */
+
+    /* 【公式】OutHi = 1 − Ff
+     * 总油门 Duty = Out + Ff 不能超过 1，前馈已经占了 Ff，PI 最高只能到 1−Ff。
+     * 到顶后再往上加也会被下一行夹回来，不会在后台越积越多（抗积分饱和）。 */
+    const float f32OutHi   = DAB_DIS_U_MAX - f32Ff;
+
+    /* 先加上本拍 Δu，得到“想去的位置”；真正写入前还要夹一次 */
+    const float f32OutNext = pstPi->f32Out + f32DeltaPi;
+
+
+    /* =========================================================================
+     * 4. 写回记忆，拼出最终油门
+     * ========================================================================= */
+
+    pstPi->f32Ref     = f32Ref;   /* 记下本拍单桥目标，方便观测 */
+    pstPi->f32DutyFf  = f32Ff;    /* 本拍生效的前馈，下拍缓入从这里起步 */
+    pstPi->f32Err1    = f32Err;   /* 本拍误差留给下拍做“上拍误差” */
+
+    /* 用“想去的位置”判是否顶满：OutNext ≥ OutHi 就置位，通知外环别再往上积分。
+     * 为什么不先夹再判？浮点加减会有一点点尾巴，先夹成 OutHi 再加 Ff，
+     * 总和可能变成 0.999999，按 ≥1 去比会漏一拍。 */
+    pstPi->u16DutySat = (f32OutNext >= f32OutHi) ? 1U : 0U;
+
+    /* 【公式】Out = 把 OutNext 夹到 [−Ff , OutHi]
+     * 上限：Out+Ff ≤ 1；下限：Out+Ff ≥ 0。直接夹死，不再用 if 决定加不加。 */
+    pstPi->f32Out     = DAB_SAT(f32OutNext, -f32Ff, f32OutHi);
+
+    /* 【公式】Duty = Out + Ff，再兜底夹到 [0, 1]，交给发波 */
+    pstDuty->f32Duty  = DAB_SAT(pstPi->f32Out + f32Ff, 0.0f, DAB_DIS_U_MAX);
 }
 
 /* 放电占空比分段映射：u ∈ [0,1] → HV / LV 占空比
@@ -383,7 +539,7 @@ static inline void Dab_Ctrl_DisDutyMap(float f32Duty, float *pf32HvDuty, float *
     float f32HvDutyTmp;
     float f32LvDutyTmp;
 
-    f32Duty = DAB_SAT(f32Duty, 0.0f, 1.0f);
+    f32Duty = DAB_SAT(f32Duty, 0.0f, DAB_DIS_U_MAX);
 
     if (f32Duty < DAB_U_MIN_PACKET)
     {
@@ -445,17 +601,6 @@ static inline void Dab_Ctrl_OutputReset(void)
     Dab_Ctrl_ChgOutputReset(&stDabPi1, &stDabDuty1);
 }
 
-/* SR 占空比 = SrRatio × 主占空比 - 死区，限幅 [0, 0.44]（不得超过低压桥最大值） */
-#pragma FUNC_ALWAYS_INLINE(Dab_Ctrl_SrDutyCalc);
-static inline float Dab_Ctrl_SrDutyCalc(Uint16 u16Enable, float f32Duty)
-{
-    if (u16Enable == 0U)
-    {
-        return 0.0f;
-    }
-    return DAB_SAT(stDabParam.f32SrRatio * f32Duty - DAB_SR_DUTY_MARGIN, 0.0f, DAB_SR_DUTY_MAX);
-}
-
 /* SR 使能：只看实测瞬时功率。
  *   关断——否定式，任一拍跌破下限（含 NaN）当拍即撤。滤波值有滞后，
  *         滞后期间电流已回流，外环会失去控制权，所以必须用瞬时量；
@@ -511,75 +656,108 @@ static inline void Dab_Ctrl_SrStateUpdate(ST_DAB_DUTY *pstDuty, float f32InstW)
  * 发波条件成立（压差足够、未休眠、限流 > 0），本函数内部不再判断。 */
 
 /* 充电电流域 PI 步：误差 → 增量 PI → 对称限幅 → 指令夹位 → back-calc 抗饱和。
- * 全程在电流域（A）工作，返回本拍电流指令 i_cmd。
- * 因为这里不是buckboost，依然要做成单极性来做控制：
- * ival>iref,这时候要降低占空比，err就要<0；
- * ival<iref,这时候要增加占空比，err就要>0。
- * 变量对应：iref = f32Iref（需求幅值）；ival = (−f32Curr) 取反后的反馈幅值，
- * 即 e = f32Iref − (−f32Curr) = −Ref − Ical（每路口径）。 */
+ * 单极性控制：实测幅值低于给定(e>0)就加力，高于给定(e<0)就收。
+ * 误差直接写成 e = f32Iref + f32Curr（f32Curr 充电为负，加号即减幅值）。 */
 #pragma FUNC_ALWAYS_INLINE(Dab_Ctrl_ChgPiStep);
 static inline float Dab_Ctrl_ChgPiStep(ST_DAB_PI *pstPi, float f32Curr,
                                        const ST_DAB_CHG_CTX *pstCtx)
 {
+    /* ① 本拍给定幅值(A，恒正)：外环算成 max(−0.5·Bus.f32Ref, 0.02) 再被任务限流 fmin 压住。 */
     const float f32Iref    = pstCtx->f32Iref;
-    const float f32IcmdMax = pstCtx->f32IcmdMax;
-    float f32Err;
-    float f32Corr;
-    float f32Raw;
-    float f32Icmd;
 
-    pstPi->f32Ref = -f32Iref;   /* 系统约定：充电给定为负。外面谈的是电流大小（正数好懂），
-                                 * 进环记账换带符号：充电记负账、放电记正账 */
+    /* ② 本路能力上限(A，恒正)：由压差和占空比上限折算，是“物理能给多少”，不是保护阈值。 */
+    const float f32IcmdMax = pstCtx->f32IcmdMax;
+    const float f32CorrMax = __fmax(f32IcmdMax - f32Iref, 0.0f);
+
+    float f32Err;    /* 本拍误差 e(n) */
+    float f32Corr;   /* 本拍修正量 Corr(n)：叠在给定上的“垫量” */
+    float f32Raw;    /* 未夹位的指令 Iref+Corr */
+    float f32Icmd;   /* 夹位后的指令，交给开方逆模型 */
+
+    /* ③ 对外记账：系统约定充电记负、放电记正的带符号口径，CAN 观测和换向判决都读它。
+     *    环内全程用幅值(正数)，只在这里翻一次符号。 */
+    pstPi->f32Ref = -f32Iref;
+
+    /* ④ 本拍误差 = 要的 − 实际。例：给定 3.0A、实测 −2.8A → e = 3.0 + (−2.8) = +0.2A（还差，加力）。 */
     f32Err  = f32Iref + f32Curr;
+
+    /* ⑤ 增量式 PI：Corr(n) = Corr(n−1) + K1·e(n) − K2·e(n−1)
+     *      K1 = α·(1+wz·Ts) = 0.31416×1.08 = 0.3393，K2 = α = 0.31416
+     *    电流偏大时，最多减掉整个给定，让电流指令降到 0。
+     *    还差电流时，最多加到本拍能力上限。给定已到上限时，正向余量为 0。 */
     f32Corr = DAB_SAT(pstPi->f32Out + DAB_CHARGE_K1 * f32Err - DAB_CHARGE_K2 * pstPi->f32Err1,
-                      -(DAB_CHARGE_CORR_NEG_K * f32Iref + DAB_CHARGE_CORR_ABS),
-                      DAB_CHARGE_CORR_POS_K * f32Iref + DAB_CHARGE_CORR_ABS);
-    f32Raw  = f32Iref + f32Corr;
-    /* 通俗版：最终电流指令夹在 [0, 能力上限]——不许为负（反向功率归放电逻辑管），
-     * 不许超能力（超过也顶不出占空比，白搭）。 */
+                      -f32Iref, f32CorrMax);
+
+    /* ⑥ 用完正向余量时直接取能力上限，避免先减后加的舍入把指令留在上限下方。
+     *    给定已超过能力时，保留超出的给定，供后面的限幅回算。 */
+    f32Raw = (f32Corr >= f32CorrMax) ? __fmax(f32Iref, f32IcmdMax) : (f32Iref + f32Corr);
+
+    /* ⑦ 指令夹位到 [0, IcmdMax]：下限 0 是硬约定（反向功率归放电逻辑，充电环不许出负指令），
+     *    上限是物理能力，超了只是把占空比顶到天花板、白让 PI 积分。 */
     f32Icmd = DAB_SAT(f32Raw, 0.0f, f32IcmdMax);
 
+    /* ⑧ back-calc 抗饱和：只改“下一拍用的积分器”，不改本拍输出。被夹住时把差额一半扣回 Corr，
+     *    约 3~4 拍退干净；没夹住时差额为 0，Corr 原样保留。
+     *      顶上限 → 差额为负 → Corr 往下退；  到下限 → 差额为正 → Corr 往上补。 */
     pstPi->f32Out  = f32Corr + 0.5f * (f32Icmd - f32Raw);
+
+    /* ⑨ 存本拍原始误差（不是 Corr），供下一拍 −K2·e(n−1) 用。 */
     pstPi->f32Err1 = f32Err;
 
+    /* ⑩ 输出本拍电流指令(A)。 */
     return f32Icmd;
 }
 
+/* 充电单路电流环（本拍动作）：① 电流域 PI 出 i_cmd ② 开方逆模型出占空比 ③ SR 判据。
+ * 谁决定模式：Dab_Ctrl_Loop 的上层状态机；本函数只管本拍占空比和 SR，不再判发波条件。 */
 #pragma FUNC_ALWAYS_INLINE(Dab_Ctrl_ChgCurrLoop);
 static inline void Dab_Ctrl_ChgCurrLoop(const ST_DAB_CHG_CTX *pstCtx, ST_DAB_PI *pstPi,
                                         ST_DAB_DUTY *pstDuty, float f32Curr)
 {
+    /* 本拍占空比上限：绝对上限 0.43 / ZCS 允许 / 峰值电流允许 三者取小，Main 每拍算好。
+     * 母线越高、压差越小，它能给的上限越低——是“能开多宽”，不是保护阈值。 */
     const float f32DutyMax = pstCtx->f32DutyMax;
-    float f32Icmd;
-    float f32Duty;
 
-    /* ① 电流域 PI 步（误差/对称限幅/指令夹位/back-calc 抗饱和，输出电流指令） */
-    f32Icmd = Dab_Ctrl_ChgPiStep(pstPi, f32Curr, pstCtx);
+    /* ① 电流域 PI 步 → 出本拍电流指令 i_cmd(A)。饱和与抗饱和已在上一节做完。 */
+    const float f32Icmd = Dab_Ctrl_ChgPiStep(pstPi, f32Curr, pstCtx);
 
-    /* ② 开方逆模型（TMU）：电流指令 → 占空比 */
-    f32Duty = __fmin(__sqrt(DAB_CHARGE_KFL * f32Icmd * pstCtx->f32InvDv), f32DutyMax);
-    pstDuty->f32Duty = f32Duty;
+    /* ② 开方逆模型(TMU 硬件 sqrt)：i(d) = ΔV·d²/KFL ⇒ d = sqrt(KFL·i_cmd/ΔV)
+     *    KFL = fs·Lk = 50kHz×35µH = 1.75；ΔV = Vbus − n·Vbat 取倒数存进 f32InvDv（乘法替除法）。
+     *    d 随 i 走平方根，PI 看到的对象在电流域近似线性，K1/K2 才敢固定。
+     *    最后 fmin 到 DutyMax：算多了按上限发，差额由 u16DutySat 上报外环。 */
+    const float f32Duty = __fmin(__sqrt(DAB_CHARGE_KFL * f32Icmd * pstCtx->f32InvDv), f32DutyMax);
 
-    /* CAN 观测直接取环内结果：充电侧 f32DutyFf 记录本拍实际占空比，
-     * 不再在 Main 里另算一遍标称开方（省一次 TMU 和一份重复代码）。
-     * 注：放电侧该字段是真前馈 u_ff，由放电环自己写，语义不受影响。 */
-    pstPi->f32DutyFf = f32Duty;
+    /* ③ 本拍占空比下发，这一行之后 PWM 按它发波（占空比 = CMP/2/TBPRD）。 */
+    pstDuty->f32Duty  = f32Duty;
 
-    /* 饱和在夹位发生的域内判：操作数精确相等，避免 sqrt 反算回占空比域出现 1ULP 漂移 */
+    /* ④ CAN 观测复用同一次开方：充电侧此字段存的就是本拍实际占空比，Main 不再重算标称值。 */
+    pstPi->f32DutyFf  = f32Duty;
+
+    /* ⑤ 饱和标志交给外环：电流域顶 IcmdMax 或占空比域顶 DutyMax 都算饱和，外环据此停积分。
+     *    在“夹位发生的那个域”里比较，操作数精确相等，避开 sqrt 反算占空比的 1ULP 漏判。
+     *    用 >=：正好等于上限也算饱和。 */
     pstPi->u16DutySat = ((f32Icmd >= pstCtx->f32IcmdMax) || (f32Duty >= f32DutyMax)) ? 1U : 0U;
 
-    /* ③ SR：占空比为 0 立即撤销；否则按瞬时功率判开通/关断 */
+    /* ⑥ 占空比为 0 说明本拍不发波(i_cmd 被夹到 0，sqrt(0)=0)：立即撤 SR，
+     *    不留使能态，防止无主管导通时低边管开通造成小流量倒流。给定撤掉当拍停波就落在这里。 */
     if (f32Duty <= 0.0f)
     {
         Dab_Ctrl_SrClear(pstDuty);
     }
     else
     {
-        float f32InstW = -pstCtx->f32Vslow * f32Curr;   /* 本拍瞬时功率，倒灌时为负 */
+        /* ⑦ 按瞬时功率判 SR 态：W = Vbus_slow × |I| = −f32Vslow × f32Curr（Curr 充电为负，取负后为正）。
+         *    用瞬时量不用滤波量：该关的那一拍电流已经倒流，滤波值有滞后会错过。
+         *    关断：任一拍跌破 OFF 门限当拍就撤（含 NaN）；开通：连续 N 拍过 ON 门限才认。 */
+        Dab_Ctrl_SrStateUpdate(pstDuty, -pstCtx->f32Vslow * f32Curr);
 
-        Dab_Ctrl_SrStateUpdate(pstDuty, f32InstW);
-        pstDuty->f32SrDuty = Dab_Ctrl_SrDutyCalc(pstDuty->u16SrEnable, f32Duty)
-                             * ((float)pstDuty->u16SrSoft * DAB_SR_SOFT_INV);
+        /* ⑧ SR 占空比 = 主占空比 × 匝比折算 − 死区余量，夹在 [0,0.44]。f32SrRatio = min(Vslow,VbusRaw)/E，
+         *    取较低母线算保证不超调。再乘软起 u16SrSoft/20：使能后 20 拍从 5% 放到 100%
+         *    （50kHz 下 400µs），把误开的冲击摊开。未使能直接给 0，不复用上一拍。 */
+        pstDuty->f32SrDuty = (pstDuty->u16SrEnable != 0U)
+            ? DAB_SAT(stDabParam.f32SrRatio * f32Duty - DAB_SR_DUTY_MARGIN, 0.0f, DAB_SR_DUTY_MAX)
+              * ((float)pstDuty->u16SrSoft * DAB_SR_SOFT_INV)
+            : 0.0f;
     }
 }
 
@@ -655,13 +833,19 @@ static inline void Dab_Ctrl_Loop(Uint16 u16IsCharge, Uint16 u16HoldOff)
         goto resetOutput;
     }
 
-    /* 充、放电分别使用 -A/0 和 0/+A 的休眠/唤醒阈，NaN 归休眠。 */
+    /* 充、放电共用同一套休眠/唤醒阈（充电先取 −Ref 翻成正需求）：
+     *   dmd < 0 → 休眠；dmd > A → 唤醒；中间保持；NaN 因 !(dmd >= 0) 归休眠。
+     * 充电特例（对照 Bus.f32Ref）：
+     *   Ref > 0  → dmd < 0，本拍休眠封波，走不到下面的 0.02A 地板；
+     *   Ref == 0 → dmd == 0，不改休眠态：若仍唤醒则继续跑，地板会保活 0.02A/桥；
+     *   Ref < 0  → 有充电需求，幅值够大才唤醒（dmd > A）。
+     * 是否改放电由状态机另判（如 Ref>+0.5A 计票），与本拍封波不是同一层。 */
     f32Dmd = (u16IsCharge != 0U) ? -Bus.f32Ref : Bus.f32Ref;
-    if (!(f32Dmd >= ((u16IsCharge != 0U) ? -DAB_BURST_HYST_A : 0.0f)))
+    if (!(f32Dmd >= 0.0f))
     {
         g_stDabIsrState.u16BurstOff = 1U;
     }
-    else if (f32Dmd > ((u16IsCharge != 0U) ? 0.0f : DAB_BURST_HYST_A))
+    else if (f32Dmd > DAB_BURST_HYST_A)
     {
         g_stDabIsrState.u16BurstOff = 0U;
     }
@@ -682,6 +866,11 @@ static inline void Dab_Ctrl_Loop(Uint16 u16IsCharge, Uint16 u16HoldOff)
     }
     else
     {
+        /* 能走到这里：未休眠，且 Ref <= 0（Ref > 0 上面已封波）。
+         * 【公式】Iref = min( max(−0.5·Ref, 0.02), −0.5·RefLo )
+         *   Ref < 0 且 |0.5·Ref| < 0.02 → 抬到 0.02A/桥（小电流保活）；
+         *   Ref == 0                     → max(0, 0.02)=0.02A/桥（零给定保活，属有意设计）；
+         *   任务限流 RefLo 更紧时外层 min 按上限放行（安全优先于保活）。 */
         stChgCtx.f32Iref  = __fmin(__fmax(-DAB_CURR_PER_BRIDGE * Bus.f32Ref, DAB_CHARGE_I_KEEP_MIN),
                                    -DAB_CURR_PER_BRIDGE * f32RefLo);
         stChgCtx.f32Vslow = f32Vslow;

@@ -78,7 +78,7 @@ static inline float sRampTrack(float f32Value, float f32Target, float f32Step)
 /*==============================================================================
  * 电流环与发波
  *============================================================================*/
-/* 只清运行记忆。K1/K2/OutMax 由 Ctrl_SetMode 装载。 */
+/* 只清运行记忆。K1/K2 由 Ctrl_SetMode 装载；放电 u 上限用宏 DAB_DIS_U_MAX。 */
 static void sPiReset(ST_DAB_PI *pstPi)
 {
     pstPi->f32Err1 = 0.0f;
@@ -88,12 +88,11 @@ static void sPiReset(ST_DAB_PI *pstPi)
     pstPi->u16DutySat = 0U;   /* 饱和标志一并清零，换向/复位后外环从"未饱和"起步 */
 }
 
-static void sPiInit(ST_DAB_PI *pstPi, float f32K1, float f32K2, float f32OutMax)
+static void sPiInit(ST_DAB_PI *pstPi, float f32K1, float f32K2)
 {
     sPiReset(pstPi);
     pstPi->f32K1 = f32K1;
     pstPi->f32K2 = f32K2;
-    pstPi->f32OutMax = f32OutMax;
 }
 
 static void sDutyClear(ST_DAB_DUTY *pstDuty)
@@ -285,32 +284,31 @@ void Ctrl_StandbyClear(void)
     CurShare_ResetComp();
 }
 
-/* 封波关中断窗口内装载工况：内环系数、PI 占空比上限、u16IsCharge，并清两路 PI 与 Duty。
+/* 封波关中断窗口内装载工况：内环系数、u16IsCharge，并清两路 PI 与 Duty。
  * 出 STANDBY / 冷启共用此环清零点；Bus 动态量与 Ramp 由随后 RampInit*（含 sBusSeed）覆盖。
- * 充电 K1/K2 置 0，ISR 用专用系数，PI 上限 DAB_CHG_D_LOW_MAX；放电 K1=Kp+Ki·Ts，K2=Kp，上限 1。
+ * 充电 K1/K2 置 0，ISR 用专用系数，占空比上限走 pstCtx->f32DutyMax / DAB_CHG_D_LOW_MAX；
+ * 放电 K1=Kp+Ki·Ts，K2=Kp，PI 输出上限是宏 DAB_DIS_U_MAX，不再随工况装载。
  * 非充电入参一律按放电装，避免残留上一档参数。
  * 误差低通用固定宏 DAB_BUS_ALPHA，不再按载波装载。 */
 void Ctrl_SetMode(Uint16 workMode)
 {
-    float f32Kp, f32KiTs, f32DutyMax;
+    float f32Kp, f32KiTs;
 
     if (workMode == (Uint16)WORK_MODE_CHARGE)
     {
         f32Kp = 0.0f;
         f32KiTs = 0.0f;
-        f32DutyMax = DAB_CHG_D_LOW_MAX;
         stDabParam.u16IsCharge = 1U;
     }
     else
     {
         f32Kp = DAB_DISCHARGE_KP;
         f32KiTs = DAB_DISCHARGE_KI_TS;
-        f32DutyMax = 1.0f;
         stDabParam.u16IsCharge = 0U;
     }
 
-    sPiInit(&stDabPi0, f32Kp + f32KiTs, f32Kp, f32DutyMax);
-    sPiInit(&stDabPi1, f32Kp + f32KiTs, f32Kp, f32DutyMax);
+    sPiInit(&stDabPi0, f32Kp + f32KiTs, f32Kp);
+    sPiInit(&stDabPi1, f32Kp + f32KiTs, f32Kp);
 
     sDutyClear(&stDabDuty0);
     sDutyClear(&stDabDuty1);

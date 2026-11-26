@@ -17,11 +17,8 @@
  * 功率和电池电流限值为整机值，两路各分一半；峰值限值为单路原边值。 */
 #define DAB_CHARGE_KFL          (1.75f)       /* 50kHz*35uH，不乘2 */
 #define DAB_CHARGE_INV_KFL      (1.0f / DAB_CHARGE_KFL)
-/* 漏感取 0.8 倍和 1.2 倍标称值。
- * 0.8 倍漏感同占空比下电流最大：只用于峰值占空比约束（上沿封限，防漏感偏小超峰）。
- * 外环物理能力按标称漏感估算——能力是限流依据，取每台机器可达的典型值；
- * 1.2 倍只参与电流修正量上沿。 */
-#define DAB_CHARGE_KFL_MAX      (DAB_CHARGE_KFL * 1.20f)
+/* 峰值电流限幅按 0.8 倍漏感计算。同样的占空比下，漏感越小，峰值电流越大。
+ * 充电电流指令上限按标称漏感折算。 */
 #define DAB_CHARGE_KFL_MIN      (DAB_CHARGE_KFL * 0.80f)
 #define DAB_CHARGE_INV_KFL_MIN  (1.0f / DAB_CHARGE_KFL_MIN)
 /* 电流域 PI：开方逆模型线性化后对象增益为 1，系数固定。 */
@@ -29,11 +26,6 @@
 #define DAB_CHARGE_WZ_I_TS      (0.08f)       /* 4000rad/s*20us */
 #define DAB_CHARGE_K1           (DAB_CHARGE_ALPHA_I * (1.0f + DAB_CHARGE_WZ_I_TS))
 #define DAB_CHARGE_K2           (DAB_CHARGE_ALPHA_I)
-/* 电流修正量范围按 0.8~1.2 倍漏感折算：偏大需多给 0.2·Iref，偏小需少给 0.2·Iref；
- * 绝对裕量覆盖小电流段损耗与零点偏差。 */
-#define DAB_CHARGE_CORR_POS_K   (DAB_CHARGE_KFL_MAX / DAB_CHARGE_KFL - 1.0f)
-#define DAB_CHARGE_CORR_NEG_K   (1.0f - DAB_CHARGE_KFL_MIN / DAB_CHARGE_KFL)
-#define DAB_CHARGE_CORR_ABS     (0.5f)        /* A */
 /* Buck 发波判据：能力域回差（ΔV 与占空比上限共同折算的两路合计可达电流）。
  * 不用固定电压回差：ΔV 是两个 ADC 通道相减、再经匝比放大，量化误差最坏 8~10V，
  * 而 6V/2V 的回差只有 4V，落在误差带内形同虚设。能力域把误差按同样比例带进来，
@@ -107,12 +99,17 @@
 #define DAB_DISCHARGE_HV_SLOPE   (0.45f)            /* 放电高压桥占空比后段斜率 */
 
 /* 放电电流环参数沿用当前工程值，实机动态性能尚待验证。 */
+#define DAB_DIS_U_MAX              (1.0f)            /* 放电虚拟油门 u 上限；DisCurrLoop/DisDutyMap 共用，不进 ST_DAB_PI */
 #define DAB_DISCHARGE_KP           (0.002f)          /* 放电内环 Kp */
 #define DAB_DISCHARGE_KI_TS        (0.00333333f)     /* Ki*Ts = 200/60000 = 0.0033333，放电内环 60kHz */
 
 #define DAB_DUTY_MAX_STEPS         (5.0f)            /* PI增量限步系数：剩余调制行程/5 */
 #define DAB_DUTY_MAX_STEPS_INV     (1.0f / DAB_DUTY_MAX_STEPS)  /* =0.2，热路径用乘逆代替每拍除法 */
-#define DAB_DUTY_STEP_MIN          (0.1f)            /* PI允许单拍步长的最小上限 */
+/* STEP_MIN 必须 > 0：DisCurrLoop 里 DAB_SAT(Δu, −STEP_DOWN, stepMax) 要求 lo≤hi；
+ * stepMax≥STEP_MIN，若 STEP_MIN≤0 且低于 −STEP_DOWN，SAT 会退化成恒返回下轨。
+ * 浮点不能 #if，整数源供 Interrupt_CtrlDab.c 编译期断言。 */
+#define DAB_DUTY_STEP_MIN_MILLI    (100U)            /* 0.100，整数源(×1000) */
+#define DAB_DUTY_STEP_MIN          ((float)DAB_DUTY_STEP_MIN_MILLI / 1000.0f) /* PI单拍步长最小上限 */
 #define DAB_DUTY_STEP_DOWN         (0.2f)            /* PI允许单拍下降步长的固定上限, 限制电流冲击 */
 
 /* 误差低通每载波拍执行，Alpha 固定不随工况切换。
