@@ -172,15 +172,15 @@ void BootProto_RxByte(uint16_t byte)
 
 /*------------------------------------------------------------------------------
 * FUNCION :  BootProto_Task_1ms()
-* PURPOSE :  1) UpdateFlag 置位边沿 → 立即软强制兜底；持续封波由状态机接管
-*               （SM_StopReq 将 u16FlashUpdateFlag 纳入停机四触发，
-*                停机转换 OstStop 锁存 + 非 RUN 态 ISR 每拍 Seal，对齐 v102 cPV_FlashStatus）
+* PURPOSE :  1) UpdateFlag 置位边沿 → 立即软强制兜底；持续封波三路互补：
+*               ISR 见升级标志每拍 seal；SM_StopReq 纳入停机四触发后 OstStop 锁存；
+*               非 RUN 后退回 INIT 后仍由 ISR ① 门封波（对齐 v102 cPV_FlashStatus）
 *            2) FlashReady 持续 2s 确认（对齐 v102：200×10ms）→ 封波兜底 → 0x55AA + MOV SP,#0 + LB 0x080000 跳 Boot
 *------------------------------------------------------------------------------*/
 void BootProto_Task_1ms(void)
 {
-    /* 进入升级态边沿：仅作立即生效的软强制（AQCSFRC 可被判向/故障翻转清除，
-     * 不承担持续封波；持续封波依赖状态机停机路径的 OST 锁存与每拍 Seal）；
+    /* 进入升级态边沿：立即软强制（AQCSFRC）；OST 前靠 ISR 每拍 seal 防发波口重写顶掉；
+     * 持续硬封波仍由状态机停机路径 OstStop 锁存。
      * 升级态撤销后清 u16PwmDisabled，确保再次进升级态仍能 1ms 立即封波。 */
     if (stBootProto.u16FlashUpdateFlag != 0U)
     {

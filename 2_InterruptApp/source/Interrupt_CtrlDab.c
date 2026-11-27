@@ -163,6 +163,8 @@ static inline void Dab_Ctrl_BusVoltLoop(float f32Vo, float f32RefMin, Uint16 u16
         }
 
         const float f32T = DAB_SAT((f32ErrAbs - DAB_BUS_GAIN_E_LO) * DAB_BUS_GAIN_INV_SPAN, 0.0f, 1.0f);
+        /* 比例故意乘未夹位偏差：大误差时仍按满幅 Kp×真实压差要电流；
+         * ±40V 只约束 Kp/Ki 折线与积分，输出再由 CapHi 摆率收口 */
         const float f32Prop = f32Kp * f32ErrRaw;
         float f32Ki = DAB_BUS_KI_LO + DAB_BUS_KI_SPAN * f32T;
         float f32Integ = Bus.f32Integ;                                              // 上一拍积分量 I
@@ -1109,7 +1111,9 @@ static inline void Dab_Pwm_Seal(void)
 /* 本拍控制 + 发波（封波门 / 方向门 / 发波都在这里，EPWM10_ISR 只剩采样与应答）
  *
  * 门顺序不能动：
- *   ① 故障或非闭环态 → 强制低，直接返回（不跑控制）；
+ *   ① 故障 / 升级中 / 非闭环态 → 强制低，直接返回（不跑控制）；
+ *      升级标志与 1ms 软停、2ms OST 互补：标志有效期间每拍 seal，
+ *      避免 OST 锁存前发波口重写 AQCSFRC 顶掉软强制；
  *   ② openTest 开环测试 → 跳过内外环与方向门，直接按给定占空比发波；
  *   ③ 方向封波命中 → 先跑外环（100µs 判向要用 Bus.f32Ref），再清内环、强制低；
  *   ④ 否则正常发波。方向门必须在 Dab_Pwm_*Update 之前：后者会清 AQCSFRC 并置
@@ -1122,8 +1126,9 @@ static inline void Dab_Ctrl_fun(Uint16 u16IsCharge)
     float  f32D0;
     float  f32D1;
 
-    /* ① 故障或非闭环态 → 强制低，直接返回 */
+    /* ① 故障 / 升级中 / 非闭环态 → 强制低，直接返回 */
     if (FAULT_ANY() || CfgParam.SysCmd.bit.faultcmd ||
+        (stBootProto.u16FlashUpdateFlag != 0U) ||
         ((u16State != (Uint16)SM_STATE_RAMP_CLOSE) && (u16State != (Uint16)SM_STATE_RUN)))
     {
         goto seal;
@@ -1296,9 +1301,8 @@ interrupt void EPWM10_ISR(void)
     stADC.BusCurr2.f32IsrResult   = f32I1;
     stADC.BatCurr.f32IsrResult    = (f32I0 + f32I1) * f32Vbus * g_stDabIsrState.f32InvBatVolt;
 
-    /* ① 快保护：只判断置位（母线过压取 max(VBUS1, VBUS2)） */
-    Fault_FastProtect(f32I0, f32I1,
-                      __fmax(stADC.BusVolt1.f32IsrResult, stADC.BusVolt2.f32IsrResult));
+    /* ① 快保护：只判断置位（母线过压取继电器 VM 瞬时值 f32Vbus，桥侧 VBUS1/VBUS2 不参与） */
+    Fault_FastProtect(f32I0, f32I1, f32Vbus);
 
     /* 加热膜 1kHz 软 PWM（仅翻转） */
     HeatFilm_Isr(u16IsCharge);

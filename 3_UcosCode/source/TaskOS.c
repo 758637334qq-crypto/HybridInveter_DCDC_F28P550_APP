@@ -127,7 +127,7 @@ void Task_TimerCheckIn(void)
 
 /* 到期才执行：Timer2 ISR(100us) 按各任务 u16setTimeCnt 计数并置 TASK_TIMER 事件，
  * 主循环每圈只跑已到期的任务 —— 五档节拍(100us/1ms/2ms/5ms/50ms)严格按 tick 分频；
- * 某任务执行超时(>100us)时，其事件已由 ISR 置位，下一圈立即补跑：滞后不丢失、不叠跑。
+ * 同一任务多次到期时，若待执行位一直未被主循环取走，只执行一次。
  * p550 移植任务内部无事件门，必须在此统一门控（v102 旧任务内部自带 OSEventConfirm，已删除）。
  * P1：执行前后读 CpuTimer1 TIM 测任务耗时（含被 ISR 抢占的墙钟时间），写入
  * u32TaskRunTimeUs/u32TaskRunTimeMaxUs，用于验证各 tick 叠峰总耗时是否超出 100us 预算。 */

@@ -2,22 +2,21 @@
  * App_CtrlData.h — DAB 控制数据与任务侧接口
  *
  * 数据沿给定往下走：
- *   Ramp / RampTarget     1ms 斜坡当前值与终点
- *   g_CtrlBusRef_V        发布给 ISR 的电压给定 = Ramp.v + CurShare.voltAdj
- *   Bus                   共用电压外环，输出总电流给定
+ *   Ramp / RampTarget     1ms 斜坡当前值与终点（Ramp 跨 ISR 共享，volatile）
+ *   g_CtrlBusRef_V        发布给 ISR 的电压给定 = Ramp.v + CurShare.voltAdj（volatile）
+ *   Bus                   共用电压外环（纯 ISR 运行态），输出总电流给定
  *   stDabPi0 / stDabPi1   两路电流环，各取总给定的一半
  *   stDabDuty0 / 1        两路发波记忆
  *   stDabParam            当前充/放电工况；任务装载，充电 ISR 更新 f32SrRatio
  *
- * 任务接口：
- *   Ctrl_Init           INIT 复位斜坡、均流补偿和环路运行态
- *   Ctrl_StandbyClear   STANDBY 入口仅清均流；环清零在出态
- *   Ctrl_SetMode        封波关中断窗装工况并清内环/Duty
- *   Ctrl_RampCfg        每 1ms 读配置并推进一步斜坡
+ * 任务接口（本模块零依赖 RunState / CurShare，编排由状态机与 Task_1ms 完成）：
+ *   Ctrl_Init           INIT 复位斜坡、外环与两路内环/发波
+ *   Ctrl_SetMode        封波关中断窗装工况与放电 PI 系数，并清内环/发波
+ *   Ctrl_CalcGiven      合成有效电流限值并返回禁向位图（含功率降额与硬上限）
+ *   Ctrl_RampStep1ms    闭环 1ms 步进：读配置推斜坡，返回禁向位图
  *   Ctrl_RampDone       电压和两向电流限值是否都到位
- *   Ctrl_RampInitCold   冷启：清 Bus + 装 Ramp（放电10A / 充电−2A）
- *   Ctrl_RampInitSwitch 换向：清 Bus + 装 Ramp（放电满设定 / 充电压差增益）
- *   Ctrl_CalcGiven      有效给定+禁向位图（与冷启/1ms 同一口径，供 PRECHECK 判向拍）
+ *   Ctrl_RampInitCold   冷启播种：清 Bus + 装 Ramp（放电≤10A / 充电≥−2A）
+ *   Ctrl_RampInitSwitch 换向播种：清 Bus + 装 Ramp（放电满额 / 充电压差增益 + 电压快爬）
  *
  * 环路计算在 Interrupt_CtrlDab.c。双桥 PWM 均启用。
  * 使用本头的 .c 须先包含 Includes.h。
@@ -26,10 +25,12 @@
 #define APP_CTRL_DATA_H
 
 /*==============================================================================
- * 变压器与整机电流限值
+ * 变压器、母线电压范围与整机电流硬上限
  *============================================================================*/
 #define DAB_TURNS_RATIO       (8.0f)      /* 匝比 n：高压 400V / 低压 50V */
-#define DAB_CURR_LIMIT        (20.0f)     /* 整机母线电流给定的绝对上限(A) */
+#define DAB_VOLT_MIN          (360.0f)    /* 闭环电压下限(V)，再低会倒灌 */
+#define DAB_VOLT_MAX          (450.0f)    /* 闭环电压上限(V) */
+#define DAB_CURR_LIMIT        (20.0f)     /* 整机母线电流给定硬上限(A)：由 Ctrl_CalcGiven 收口 */
 
 /*==============================================================================
  * 工况
@@ -44,22 +45,20 @@ typedef struct
 } ST_DAB_PARAM;
 
 /*==============================================================================
- * 电压外环（两路共用）
+ * 电压外环（两路共用，纯 ISR 运行态）
  * 正电流放电，负电流充电。1ms 发布斜坡，位置式 PI 出总电流，两路各取 1/2。
  * 无电压环电流前馈：f32Integ 单独保存，f32Out 是限速、限幅后的 I+Kp·e，f32Ref 来自 f32Out。
  * 大信号 = Ki_FAST 助推 + 连续预测退坡 + 加载向输出限步。
  *============================================================================*/
 typedef struct
 {
-    float f32Vref;         /* 本拍电压给定：g_CtrlBusRef_V = Ramp.v + CurShare.voltAdj */
-    float f32Err;          /* 滤波后电压误差，低通系数 DAB_BUS_ALPHA */
-    float f32Err1;         /* 上一拍未夹位误差：差分与预测基准 */
-    float f32Integ;        /* 电压外环积分(A)。输出限幅不回写这里 */
-    float f32Out;          /* 限速、限幅后的 I+Kp·e，总电流给定主通道 */
-    float f32Ref;          /* 总电流给定(A)：正放电、负充电 */
-
+    float  f32Vref;        /* 本拍电压给定：g_CtrlBusRef_V = Ramp.v + CurShare.voltAdj */
+    float  f32Err;         /* 滤波后电压误差，低通系数 DAB_BUS_ALPHA */
+    float  f32Err1;        /* 上一拍未夹位误差：差分与预测基准 */
+    float  f32Integ;       /* 电压外环积分(A)。输出限幅不回写这里 */
+    float  f32Out;         /* 限速、限幅后的 I+Kp·e，总电流给定主通道 */
+    float  f32Ref;         /* 总电流给定(A)：正放电、负充电 */
     Uint16 u16Tick;        /* ISR 相位：0 算外环，4 算陷波 */
-    Uint16 u16RecoverRamp; /* 1：换向播种后，电压给定按偏差分档快爬 */
 } ST_DAB_BUS;
 
 /*==============================================================================
@@ -70,15 +69,15 @@ typedef struct
  *============================================================================*/
 typedef struct
 {
-    float f32Ref;                          /* 本路电流给定(A)：带符号——充电存负幅值、放电存正 */
-    float f32Err1;                         /* 上一拍误差 */
+    float  f32Ref;                         /* 本路电流给定(A)：带符号——充电存负幅值、放电存正 */
+    float  f32Err1;                        /* 上一拍误差 */
 
-    float f32Out;                          /* 充电：电流修正(A)；放电：增量 PI 校正 */
+    float  f32Out;                         /* 充电：电流修正(A)；放电：增量 PI 校正 */
 
-    float f32K1;                           /* Kp + Ki·Ts */
-    float f32K2;                           /* Kp */
+    float  f32K1;                          /* Kp + Ki·Ts */
+    float  f32K2;                          /* Kp */
 
-    float f32DutyFf;                       /* 占空比前馈：放电 u_ff；充电直接存本拍实际占空比（CAN 观测用） */
+    float  f32DutyFf;                      /* 占空比前馈：放电 u_ff；充电直接存本拍实际占空比（CAN 观测用） */
 
     Uint16 u16DutySat;                     /* 上一拍内环输出顶上限标志：放电=Out夹位(OutMax-Ff)处判定，充电=电流指令SAT或占空比fmin夹位。均在夹位点精确比较，避免回加Ff的ULP漂移，供外环抗饱和判据读 */
 } ST_DAB_PI;
@@ -100,7 +99,7 @@ typedef struct
  * 1ms 斜坡
  * v：电压给定。iPos：放电上限(≥0)。iNeg：充电下限(≤0)。
  * 电压常规 1V/ms，换向后按偏差分档加快。电流限值每毫秒最多放宽 2A，收紧立即生效。
- * 任务侧逐字段写入。运行中换向在封波关中断窗口内提交。
+ * 任务侧逐字段写入，ISR 只读 iPos / iNeg；运行中换向在封波关中断窗口内提交。
  *============================================================================*/
 typedef struct
 {
@@ -113,27 +112,26 @@ typedef struct
  * 对象
  *============================================================================*/
 extern volatile ST_DAB_PARAM stDabParam;
-extern volatile ST_DAB_BUS Bus;
-extern ST_DAB_PI stDabPi0, stDabPi1;
-extern ST_DAB_DUTY stDabDuty0, stDabDuty1;
+extern volatile ST_DAB_BUS   Bus;
+extern ST_DAB_PI             stDabPi0, stDabPi1;
+extern ST_DAB_DUTY           stDabDuty0, stDabDuty1;
 
-extern ST_DAB_RAMP Ramp;                               /* 当前电压给定 / 放电限 / 充电限 */
-extern ST_DAB_RAMP RampTarget;                         /* 终点，供 Ctrl_RampDone 与均流 Iset */
-extern float g_CtrlBusRef_V;                           /* ISR 电压给定 = Ramp.v + voltAdj */
+extern volatile ST_DAB_RAMP  Ramp;                     /* 当前电压给定 / 放电限 / 充电限（ISR 读） */
+extern ST_DAB_RAMP           RampTarget;               /* 终点，供 Ctrl_RampDone 与均流 Iset（任务侧） */
+extern volatile float        g_CtrlBusRef_V;           /* ISR 电压给定 = Ramp.v + CurShare.voltAdj */
 /* g_stDabIsrState 由 Interrupt_CtrlDab.h 发布 */
 
 /*==============================================================================
  * 任务接口
  *============================================================================*/
-void Ctrl_Init(void);                                  /* INIT：复位斜坡、补偿和环路运行态 */
-void Ctrl_StandbyClear(void);                          /* STANDBY 入口：仅清均流；Bus/PI/Duty 由出态 SetMode+RampInit 清 */
-void Ctrl_SetMode(Uint16 workMode);                    /* 封波关中断窗：装工况并清内环/Duty */
+void   Ctrl_Init(void);                                /* INIT：复位斜坡、外环与两路内环/发波 */
+void   Ctrl_SetMode(Uint16 workMode);                  /* 封波关中断窗：装工况并清内环/发波 */
 
-void Ctrl_RampCfg(void);                               /* 每 1ms 读目标并推进一步 */
+Uint16 Ctrl_CalcGiven(float *pf32Dis, float *pf32Chg); /* 有效电流限值 + 禁向位图（含功率降额与硬上限） */
+Uint16 Ctrl_RampStep1ms(void);                         /* 闭环 1ms 步进：读配置推斜坡，返回禁向位图 */
 Uint16 Ctrl_RampDone(void);                            /* 1：电压和两向限值都到位 */
 
-void Ctrl_RampInitCold(float f32VoltFbk);              /* 冷启斜坡初值 */
-void Ctrl_RampInitSwitch(float f32VoltFbk);            /* 换向/出待机斜坡初值 */
-Uint16 Ctrl_CalcGiven(float *pf32Dis, float *pf32Chg); /* 有效给定+禁向：判向拍一次算出，冷启装载复用 */
+void   Ctrl_RampInitCold(float f32VoltFbk, float f32Dis, float f32Chg);   /* 冷启播种 */
+void   Ctrl_RampInitSwitch(float f32VoltFbk, float f32Dis, float f32Chg); /* 换向播种 */
 
 #endif /* APP_CTRL_DATA_H */

@@ -74,7 +74,7 @@ typedef enum
  * 3. 电压/电流工程判定阈值与 100µs 换向防抖
  * ========================================================================== */
 #define SM_V_BUS_DIFF_MAX             (30.0f)       /**< 继电器允许最大母线压差 (30V) */
-#define SM_V_MODE_BAND_LO             (10.0f)       /**< 放→充 电压反时限起算带：高于设定 +10V（对应 5ms） */
+#define SM_V_MODE_BAND_LO             (10.0f)       /**< 放→充：母线电压减去设定电压，差值大于 10V 才满足电压条件 */
 #define SM_V_MODE_BAND                (20.0f)       /**< 充→放 电压速切带（低于设定 -20V 直接 300µs 切放电）/ 放→充 1ms 参考带 */
 
 #define SM_N_PRECHECK_WIN             (20U)         /**< 预检滑动窗 40ms */
@@ -84,11 +84,11 @@ typedef enum
 
 /* 放→充 在线电压反时限积分计票（100µs 节拍，满计 SM_VOLT_ACC_FULL = 500）：
  *   ΔV <= 10V  → 清零不计票
- *   ΔV  = 10V  → 每拍 +10  → 50 拍 = 5.0ms
+ *   ΔV 刚超过 10V（如 10.1V）→ 每拍 +10 → 50 拍，约 5.0ms
  *   ΔV  = 20V  → 每拍 +50  → 10 拍 = 1.0ms
  *   ΔV >= 32.5V→ 每拍 +100 →  5 拍 = 0.5ms（最快下限，防单拍毛刺） */
 #define SM_VOLT_ACC_FULL              (500U)        /**< 放→充 电压反时限满计门限 */
-#define SM_VOLT_ACC_STEP_MIN          (10.0f)       /**< ΔV=10V 时每 100µs 增量（500/10 = 50拍 = 5ms） */
+#define SM_VOLT_ACC_STEP_MIN          (10.0f)       /**< 刚超过 10V 时，每拍从 10 票起 */
 #define SM_VOLT_ACC_STEP_MAX          (100.0f)      /**< 最大每 100µs 增量（500/100 = 5拍 = 0.5ms） */
 #define SM_VOLT_ACC_SLOPE             (4.0f)        /**< 增量斜率：(50-10)/(20-10) = 4/V，20V 时恰好 1ms */
 
@@ -102,7 +102,7 @@ typedef enum
 #define SM_IBUS_DISCHAR_STANDBY_MIN   (0.5f)        /**< 放电母线电流设定 <= 0.5A 禁止放电 */
 #define SM_IBUS_CHAR_STANDBY_MIN      (0.5f)        /**< 充电母线电流设定 <= 0.5A 禁止充电 */
 
-/* 禁止方向位图（RunState.curLowSealing）：1ms 由 Ctrl_RampCfg 重算，
+/* 禁止方向位图（RunState.curLowSealing）：1ms 由 Task1ms 调 Ctrl_RampStep1ms 重算，
  * ISR 只在"当前工况正好等于被禁方向"时封波，另一方向照常工作。 */
 #define SM_SEAL_NO_CHARGE             (1U)          /**< bit0: 禁止充电（充电设定 <= 0.5A） */
 #define SM_SEAL_NO_DISCHARGE          (2U)          /**< bit1: 禁止放电（放电设定 <= 0.5A） */
@@ -174,9 +174,6 @@ typedef struct
     CanCmd_e   canCmd;                              /**< CAN 远程总线调度模式指令 */
     Uint16     isMaster;                            /**< 主/从机工作角色标志 (1:主机, 0:从机) */
     Uint16     curLowSealing;                       /**< 禁止方向位图 (bit0:禁充电, bit1:禁放电, 0:双向可用) */
-
-    float      f32ColdDis;                          /**< PRECHECK 判向当拍有效放电限值(A)：冷启装载直接复用，不重算 */
-    float      f32ColdChg;                          /**< PRECHECK 判向当拍有效充电限值(A)：冷启装载直接复用，不重算 */
 } RunState_t;
 
 /* ==========================================================================
@@ -213,5 +210,19 @@ void SM_SoftStartTick5ms(void);
  * @brief  100us：工况仲裁 + 换向进 STANDBY（强制 5 拍 / 自动 1 拍）后装载回 RAMP_CLOSE
  */
 void SM_Standby_100us(void);
+
+/**
+ * @brief  1 = 当前处于闭环充/放电运行态（RAMP_CLOSE 或 RUN，且工况为充或放）
+ */
+static inline Uint16 SM_IsClosedLoopActive(void)
+{
+    const Uint16 u16State = (Uint16)RunState.state;
+    const Uint16 u16Mode  = RunState.workMode;
+
+    return (((u16State == (Uint16)SM_STATE_RAMP_CLOSE) ||
+             (u16State == (Uint16)SM_STATE_RUN)) &&
+            ((u16Mode == (Uint16)WORK_MODE_CHARGE) ||
+             (u16Mode == (Uint16)WORK_MODE_DISCHARGE))) ? 1U : 0U;
+}
 
 #endif /* APP_STATE_MACHINE_H */

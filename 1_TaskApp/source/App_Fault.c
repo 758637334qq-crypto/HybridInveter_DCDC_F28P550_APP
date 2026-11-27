@@ -108,13 +108,13 @@ static inline Uint16 Fault_ImbHit(float i0, float i1)
 }
 
 /**
- * @brief 快保护（ISR）：只置位不恢复；电压取 VM，与 5ms 同源；开路测试不屏蔽。
+ * @brief 快保护（ISR）：只置位不恢复；母线过压只看继电器 VM 瞬时值（入参由 ISR 传
+ *        VmBusVolt.f32IsrResult）；5ms 恢复用同一通道的 10ms 滤波值；开路测试不屏蔽。
  *        依赖 C28x 对 16 位全局字的 OR/AND 单指令原子读改写与 5ms 恢复共享 stFault.fast。
  */
 #pragma CODE_SECTION(Fault_FastProtect, ".TI.ramfunc");
 void Fault_FastProtect(float f32BusCurr0, float f32BusCurr1,float f32Vbus)
 {
-//    float f32Vbus = stADC.VmBusVolt.f32IsrResult;
 
     if (Fault_Confirm(&stFaultCnt.run.fastOvHit,
                       (Uint16)(f32Vbus > FAULT_FAST_OV),

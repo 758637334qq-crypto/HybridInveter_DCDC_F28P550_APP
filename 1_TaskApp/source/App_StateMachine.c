@@ -36,7 +36,7 @@
  *       STANDBY → 100µs 任务自增(驻留计拍)。任意时刻仅一个上下文持有它,
  *       进态统一清零(SM_EnterState), 因此无需跨上下文互斥。
  *   - irefDebounce / voltDebounce / standbyDwellN: 仅 100µs 任务写(单一写者, 免锁)。
- *   - curLowSealing: 1ms Ctrl_RampCfg 重算写, 100µs 仲裁与 ISR 读, 位图单字原子。
+ *   - curLowSealing: 1ms Task1ms(Ctrl_RampStep1ms) 与换向/预检点重算写, 100µs 仲裁与 ISR 读, 位图单字原子。
  *   - Bus.f32Ref: ISR 写、100µs 仲裁读, 允许读到 1 拍旧值(仅判向用, 不参与闭环)。
  * ============================================================================
  */
@@ -175,7 +175,7 @@ void SM_SyncSysCmd(void)
  *   ② DAB_PWM_Stop() —— AQCSFRC 软件强制低, 不等下一拍立即生效, 与①双保险;
  *   ③ workMode ← 目标方向 —— 出态时 SM_StartClosedLoop 以此装载;
  *   ④ standbyDwellN ← 驻留拍数;
- *   ⑤ 清票箱 + 清 CAN 指令(已消费) + Ctrl_StandbyClear()(仅清均流辅助量;
+ *   ⑤ 清票箱 + 清 CAN 指令(已消费) + CurShare_ResetComp()(仅清均流辅助量;
  *      Bus/PI/Duty 留给出态关中断窗内 Ctrl_SetMode+RampInit 统一清零 —— 此刻
  *      ISR 已不跑 Dab_Ctrl_Loop, 残留数据不会被消费, 无需在此抢清)。
  *
@@ -192,18 +192,18 @@ static void SM_EnterStandby(Uint16 u16Target, Uint16 u16DwellN)
     RunState.standbyDwellN = (u16DwellN == 0U) ? SM_T_STANDBY_FORCE : u16DwellN;
     SM_ClearModeDebounce();            /* ⑤a 清换向票箱(进待机=一次完整换向事务) */
     RunState.canCmd = CAN_CMD_NONE;    /* ⑤b CAN 指令已消费, 防重复解析 */
-    Ctrl_StandbyClear();               /* ⑤c 仅清均流; Bus/PI/Duty 出态再清 */
+    CurShare_ResetComp();              /* ⑤c 仅清均流; Bus/PI/Duty 出态再清 */
 }
 
 /**
  * @brief  闭环启动/换向装载: 关中断窗内原子完成"清环→播种→解封→公布状态"
  *
  * 【函数说明】冷启(PRECHECK 判向完成)与换向(STANDBY 驻留到期)共用的唯一闭环
- * 提交点。u16Mode: 目标工况; u16IsSwitch: 0=冷启播种 / 1=换向播种(额外清方向
- * 封波位, 换向后新方向才允许发波)。
+ * 提交点。u16Mode: 目标工况; u16IsSwitch: 0=冷启播种(复用入参 f32ColdDis/Chg) /
+ * 1=换向播种(窗内重算有效给定与禁向位)。
  *
  * 【流程】
- *   ① f32Vbus: 双路母线陷波均值, 斜坡/外环播种初值;
+ *   ① f32Vbus: 继电器 VM 侧陷波值, 斜坡/外环播种初值;
  *   ② 关中断窗(顺序不可调换):
  *      a. SetMode / Ctrl_SetMode / Dab_Ctrl_SessionReset / RampInit*: 装载波、环参与会话状态;
  *      b. Fault_PreStartHwOk(): 清 OST 前复核 CMPSS。失败时封波并回 INIT，
@@ -218,9 +218,12 @@ static void SM_EnterStandby(Uint16 u16Target, Uint16 u16DwellN)
  *   · 故障后恢复: OstStop 硬锁 OST, soft 位可先恢复; 仍须 b 复核通过才解锁。
  *   两类共用「复核紧贴 TZCLR」, 不拆两条清 OST API。
  */
-static void SM_StartClosedLoop(Uint16 u16Mode, Uint16 u16IsSwitch)
+static void SM_StartClosedLoop(Uint16 u16Mode, Uint16 u16IsSwitch,
+                               float f32ColdDis, float f32ColdChg)
 {
     float    f32Vbus;
+    float    f32Dis;
+    float    f32Chg;
     uint16_t intm;
     Uint16   u16HwOk;
 
@@ -232,11 +235,12 @@ static void SM_StartClosedLoop(Uint16 u16Mode, Uint16 u16IsSwitch)
     Dab_Ctrl_SessionReset();   /* 清上一会话的充电迟滞锁存，避免“轻载休眠=1”跨起机残留 */
     if (u16IsSwitch != 0U)
     {
-        Ctrl_RampInitSwitch(f32Vbus);
+        RunState.curLowSealing = Ctrl_CalcGiven(&f32Dis, &f32Chg);
+        Ctrl_RampInitSwitch(f32Vbus, f32Dis, f32Chg);
     }
     else
     {
-        Ctrl_RampInitCold(f32Vbus);
+        Ctrl_RampInitCold(f32Vbus, f32ColdDis, f32ColdChg);
     }
 
     /* 装载后核 → Start → 清后再核（挡 TZCLR 窄缝）；失败当拍封波并关功率 IO */
@@ -261,8 +265,8 @@ static void SM_StartClosedLoop(Uint16 u16Mode, Uint16 u16IsSwitch)
  * 【一句话逻辑】
  *   当前在充电: 母线跌破"设定值 - 20V" → 连续数 3 拍(300µs) → 建议换放电;
  *                或 Ref>+0.5A 且 iAct>-0.5A → 连续数 4 拍(400µs) → 建议换放电。
- *   当前在放电: 母线高出设定值 10V 以上, 并且基本没电流 → 按压差加速数票
- *                (ΔV=10V 要 5ms, ΔV=20V 要 1ms, ΔV≥32.5V 只要 0.5ms) → 建议换充电;
+ *   当前在放电: 母线与设定的压差大于 +10V，且实测电流小于 +0.5A → 按压差加票。
+ *                ΔV=10V 清票，10.1V 约 5ms，20V 约 1ms，≥32.5V 约 0.5ms → 建议换充电。
  *                或 Ref<-0.5A 且 iAct<0.5A → 连续数 4 拍(400µs) → 建议换充电。
  *   两路任意一路先数满, 就返回 1("该换向了")。
  *
@@ -333,7 +337,7 @@ static Uint16 SM_ModeArbitrate_100us(void)
         }
         else
         {
-            /* 电压没高够 10V, 或者还有明显电流: 说明母线冲高只是卸载暂态, 清票重来 */
+            /* 压差不超过 +10V，或实测电流达到 +0.5A：清票重来。 */
             RunState.voltDebounce = 0U;
         }
     }
@@ -417,7 +421,7 @@ void SM_Standby_100us(void)
             RunState.workMode = u16Next;
         }
         RunState.canCmd = CAN_CMD_NONE;             /* 出态消费, 防 force 掩盖期间残留 */
-        SM_StartClosedLoop(RunState.workMode, 1U);  /* 换向播种路径回 RAMP_CLOSE */
+        SM_StartClosedLoop(RunState.workMode, 1U, 0.0f, 0.0f);  /* 换向播种路径回 RAMP_CLOSE */
         return;
     }
 
@@ -583,7 +587,8 @@ static void Handle_Init(void)
 
     if (SM_StopReq() == 0U)                      /* ③ 放行：停机四条件皆未置 */
     {
-        Ctrl_Init();                             /* ④ 控制模块冷复位(斜坡/补偿/环路态) */
+        Ctrl_Init();                             /* ④ 控制模块冷复位(斜坡/环路态) */
+        CurShare_ResetComp();                    /*    均流补偿复位 */
 
         RunState.relayStable = 0U;               /*    RELAY 平稳计数清零 */
         SM_ClearModeDebounce();                  /*    换向票箱清零 */
@@ -666,15 +671,12 @@ static void Handle_Precheck(void)
     }
 
     RunState.workMode = workMode;                        /* ③ 判向结果落位 */
-    /* 有效给定落位：冷启装载(sRampInitCommon)直接复用，不再重算 */
-    RunState.f32ColdDis = f32Dis;
-    RunState.f32ColdChg = f32Chg;
     RunState.curLowSealing = u16Seal;
     RunState.canCmd = CAN_CMD_NONE;                      /*    CAN 指令已消费 */
     RunState.precheckLowCnt = 0U;                        /*    票数清零(下一趟从零起) */
 
-    /* 起机跳过 STANDBY：RampInitCold → RAMP_CLOSE */
-    SM_StartClosedLoop(workMode, 0U);                    /* 冷启播种路径(不清禁向位) */
+    /* 起机跳过 STANDBY：显式传入判向当拍有效给定 → RampInitCold → RAMP_CLOSE */
+    SM_StartClosedLoop(workMode, 0U, f32Dis, f32Chg);    /* 冷启播种路径(不清禁向位) */
 }
 
 /**

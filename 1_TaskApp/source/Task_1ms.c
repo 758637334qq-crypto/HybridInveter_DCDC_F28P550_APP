@@ -26,8 +26,17 @@ void Task1ms(void)
      * 高频 ISR 里只做乘法（必须排在滤波之后）。 */
     Dab_Ctrl_InvBatVoltUpdate();
 
-    /* V/±Ilim 缓起：1ms 推进，供能量环读 */
-    Ctrl_RampCfg();
+    /* V/±Ilim 缓起 + 均流下垂：仅闭环充放电态爬坡；均流每拍更新并发布 ISR 电压给定 */
+    if (SM_IsClosedLoopActive() != 0U)
+    {
+        RunState.curLowSealing = Ctrl_RampStep1ms();
+    }
+    {
+        const float f32RampV = Ramp.v;
+
+        CurShare_Update1ms(DAB_VOLT_MIN - f32RampV, DAB_VOLT_MAX - f32RampV);
+        g_CtrlBusRef_V = f32RampV + CurShare.voltAdj;
+    }
 
     /* ---- 接收链路：1ms Rx（非 100us）；SCIB 顺序：Boot 静默检查 → UartProto 喂字节 ---- */
     CanComm_Task_Rx();       /* CAN 取帧 + 0x20/均流转发 */
