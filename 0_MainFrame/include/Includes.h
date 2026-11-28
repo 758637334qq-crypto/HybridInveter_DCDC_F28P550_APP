@@ -82,4 +82,8 @@ extern Uint16 u16SoftwareVerison;
 extern Uint16 u16SoftwareSubverison;
 extern Uint16 u16HardwareVerison;
 
+/* 看门狗双心跳（各自独立 16 位原子写，避免 EPWM10 抢占 Timer2 时的读改写竞态） */
+extern volatile Uint16 g_u16WdgHbEpwm;
+extern volatile Uint16 g_u16WdgHbTmr2;
+
 #endif /* INCLUDE_INCLUDES_H */

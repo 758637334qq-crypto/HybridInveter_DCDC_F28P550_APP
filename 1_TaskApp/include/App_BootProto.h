@@ -24,12 +24,14 @@
 
 #define BOOT_PROTO_SILENCE_TICKS    (4U)        /* 4×1ms=4ms 无字节 → 断帧（原 35×100us=3.5ms，RX 轮询移 1ms 任务后按 1ms 拍取整） */
 #define BOOT_PROTO_READY_TICKS_1MS  (2000U)     /* FlashReady 持续 2000×1ms=2s 确认后才跳转（对齐 v102：原 PVBoostFlashMode 在 SuperTask 10ms 节拍内数 200×10ms=2s） */
+#define BOOT_PROTO_MODE_TIMEOUT_1MS (30000U)    /* 进 Boot 接收态后 30000×1ms=30s 仍未跳转 → 退出，恢复 AA55 */
 
 /* ==================== 2. 类型定义 ==================== */
 
 typedef struct
 {
     /* 升级状态标志（原始 stInterCommMessage 同名位，供其它模块查询） */
+    volatile uint16_t u16BootModeEn;        /* 0=APP(AA55) 态；1=已收到 0x00 mode.bit4(upboot)，只收 Boot 协议 */
     volatile uint16_t u16FlashUpdateFlag;   /* ARM 已下发升级命令 */
     volatile uint16_t u16FlashReady;        /* 允许跳 Boot（S_DSP_UPDATE） */
 
@@ -39,8 +41,9 @@ typedef struct
     volatile uint16_t u16ByteIdx;
     uint8_t  u8FlashCmd;                    /* 暂存帧[9]（全帧唯一被读取的字节） */
 
-    /* 1ms 跳转确认 */
+    /* 1ms 跳转确认 / Boot 超时退出 */
     volatile uint16_t u16ReadyCnt;          /* FlashReady 持续计数（1ms 拍） */
+    volatile uint16_t u16BootModeCnt;       /* 进 Boot 接收态后计时（1ms 拍；满 BOOT_PROTO_MODE_TIMEOUT_1MS 退出） */
     volatile uint16_t u16PwmDisabled;       /* 升级态已封波标志 */
 
     /* 帧防误触发：原始协议无 CRC，与 AA55 协议共存时要求帧[9] 连续两帧一致才更新标志 */
@@ -59,9 +62,10 @@ extern ST_BOOT_PROTO_CTRL stBootProto;
 /* ==================== 4. 公共 API ==================== */
 
 void BootProto_Init(void);          /* 清状态机/标志（main 调一次） */
+void BootProto_EnterBootMode(void); /* 收到 0x00 mode.bit4(upboot=1)：切纯 Boot 接收态、关加热膜、置封波标志 */
 void BootProto_ResetRx(void);       /* 复位收帧状态机（RX 硬件错误恢复/断帧超时时作废在收半帧） */
 void BootProto_Task_Rx(void);       /* 静默断帧检查（1ms；必须排在 UartProto_RxTask 喂字节之前） */
 void BootProto_RxByte(uint16_t byte);   /* 升级协议字节入口：0xD2 → 0x01 → 定长 96 收集 → 解析帧[9] */
-void BootProto_Task_1ms(void);      /* 升级态边沿封波 + FlashReady 2s 确认 → 跳 Boot */
+void BootProto_Task_1ms(void);      /* 升级态封波 + FlashReady 2s 跳 Boot；满 30s 未跳则退出 Boot */
 
 #endif /* APP_BOOTPROTO_H_ */

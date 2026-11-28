@@ -64,17 +64,25 @@ static void Adc_SetupSoc(volatile struct ADC_REGS *adc,
     }
 }
 
-/** 清零未使用的 SOC（fromSoc…7），避免残留 TRIGSEL 误启动转换 */
+/** 清零未使用的 SOC（fromSoc…15），避免软跳残留 TRIGSEL 误启动转换 */
 static void Adc_ClearUnusedSoc(volatile struct ADC_REGS *adc, Uint16 fromSoc)
 {
-    if (fromSoc <= 0U) { adc->ADCSOC0CTL.all = 0U; }
-    if (fromSoc <= 1U) { adc->ADCSOC1CTL.all = 0U; }
-    if (fromSoc <= 2U) { adc->ADCSOC2CTL.all = 0U; }
-    if (fromSoc <= 3U) { adc->ADCSOC3CTL.all = 0U; }
-    if (fromSoc <= 4U) { adc->ADCSOC4CTL.all = 0U; }
-    if (fromSoc <= 5U) { adc->ADCSOC5CTL.all = 0U; }
-    if (fromSoc <= 6U) { adc->ADCSOC6CTL.all = 0U; }
-    if (fromSoc <= 7U) { adc->ADCSOC7CTL.all = 0U; }
+    if (fromSoc <=  0U) { adc->ADCSOC0CTL.all  = 0U; }
+    if (fromSoc <=  1U) { adc->ADCSOC1CTL.all  = 0U; }
+    if (fromSoc <=  2U) { adc->ADCSOC2CTL.all  = 0U; }
+    if (fromSoc <=  3U) { adc->ADCSOC3CTL.all  = 0U; }
+    if (fromSoc <=  4U) { adc->ADCSOC4CTL.all  = 0U; }
+    if (fromSoc <=  5U) { adc->ADCSOC5CTL.all  = 0U; }
+    if (fromSoc <=  6U) { adc->ADCSOC6CTL.all  = 0U; }
+    if (fromSoc <=  7U) { adc->ADCSOC7CTL.all  = 0U; }
+    if (fromSoc <=  8U) { adc->ADCSOC8CTL.all  = 0U; }
+    if (fromSoc <=  9U) { adc->ADCSOC9CTL.all  = 0U; }
+    if (fromSoc <= 10U) { adc->ADCSOC10CTL.all = 0U; }
+    if (fromSoc <= 11U) { adc->ADCSOC11CTL.all = 0U; }
+    if (fromSoc <= 12U) { adc->ADCSOC12CTL.all = 0U; }
+    if (fromSoc <= 13U) { adc->ADCSOC13CTL.all = 0U; }
+    if (fromSoc <= 14U) { adc->ADCSOC14CTL.all = 0U; }
+    if (fromSoc <= 15U) { adc->ADCSOC15CTL.all = 0U; }
 }
 
 void InitChip_AdcRegs(void)

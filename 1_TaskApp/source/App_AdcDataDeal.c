@@ -13,24 +13,26 @@
 /* 全局采样池：全工程只在这一处定义（含采样数据 + 校准参数） */
 volatile ST_ADC_POOL stADC;
 
-static Uint16 s_u16BatVolt100msSeeded;
+static Uint16 s_u16BatVoltSeeded;
 
-/* 用瞬时值并行推进三档一阶低通 */
+/* 用瞬时值并行推进三档一阶低通：y += NEW * (x - y)，保证直流增益严格为 1 */
 static inline void AdcLpf3Update(volatile ST_ADC_LPF3 *pFilt, float32 fIn)
 {
-    pFilt->f32Filt10ms =
-        fIn * ADC_DAB_FILT_10MS_NEW + pFilt->f32Filt10ms * ADC_DAB_FILT_10MS_OLD;
-    pFilt->f32Filt100ms =
-        fIn * ADC_DAB_FILT_100MS_NEW + pFilt->f32Filt100ms * ADC_DAB_FILT_100MS_OLD;
-    pFilt->f32Filt400ms =
-        fIn * ADC_DAB_FILT_400MS_NEW + pFilt->f32Filt400ms * ADC_DAB_FILT_400MS_OLD;
+    float32 y;
+
+    y = pFilt->f32Filt10ms;
+    pFilt->f32Filt10ms  = y + ADC_DAB_FILT_10MS_NEW  * (fIn - y);
+    y = pFilt->f32Filt100ms;
+    pFilt->f32Filt100ms = y + ADC_DAB_FILT_100MS_NEW * (fIn - y);
+    y = pFilt->f32Filt400ms;
+    pFilt->f32Filt400ms = y + ADC_DAB_FILT_400MS_NEW * (fIn - y);
 }
 
 void AdcCtrlInit(void)
 {
     /* 整池清零，避免上电垃圾值进控制/滤波状态；电流零点回到中点 */
     memset((void *)&stADC, 0, sizeof(stADC));
-    s_u16BatVolt100msSeeded = 0U;
+    s_u16BatVoltSeeded = 0U;
     stADC.CurrOffset.f32Idd1 = BUS_CURR_MID_ADC;
     stADC.CurrOffset.f32Idd2 = BUS_CURR_MID_ADC;
 }
@@ -62,12 +64,12 @@ void Adc_CalibCurrZero(void)
     avg1 = sum1 * ADC_CURR_ZERO_INV;
     avg2 = sum2 * ADC_CURR_ZERO_INV;
 
-    /* 合理窗：中点 ±512 码（约 ±11 A @ 现比例），否则不采纳 */
-    if ((avg1 > (BUS_CURR_MID_ADC - 512.0f)) && (avg1 < (BUS_CURR_MID_ADC + 512.0f)))
+    /* 合理窗：中点 ±150 码（约 ±3.3 A @ 现比例），防止带残流/运放异常被吸收为零点 */
+    if ((avg1 > (BUS_CURR_MID_ADC - 150.0f)) && (avg1 < (BUS_CURR_MID_ADC + 150.0f)))
     {
         stADC.CurrOffset.f32Idd1 = avg1;
     }
-    if ((avg2 > (BUS_CURR_MID_ADC - 512.0f)) && (avg2 < (BUS_CURR_MID_ADC + 512.0f)))
+    if ((avg2 > (BUS_CURR_MID_ADC - 150.0f)) && (avg2 < (BUS_CURR_MID_ADC + 150.0f)))
     {
         stADC.CurrOffset.f32Idd2 = avg2;
     }
@@ -93,40 +95,31 @@ void AdcDabFilt1ms(void)
     AdcLpf3Update(&stADC.BusCurr1.Filt, stADC.BusCurr1.f32IsrResult);
     AdcLpf3Update(&stADC.BusCurr2.Filt, stADC.BusCurr2.f32IsrResult);
 
-    static ST_ADC_LPF3 st_lpf3 = {0.0f};
-    const float32 f32BatVolt = stADC.BatVolt.f32IsrResult;
-
-    /* 欠压保护使用 100ms 滤波：首拍用实测值初始化，消除从 0V 爬升导致的误报。 */
-    if (s_u16BatVolt100msSeeded == 0U)
     {
-        st_lpf3.f32Filt100ms = f32BatVolt;
-        s_u16BatVolt100msSeeded = 1U;
-    }
-    AdcLpf3Update(&st_lpf3, f32BatVolt);
+        const float32 f32BatVolt = (stADC.BatVolt.f32IsrResult > 0.0f) ? stADC.BatVolt.f32IsrResult : 0.0f;
 
-    /* 电池电压 10ms 滤波值先限幅到合法区间 [DAB_BAT_VOLT_MIN, 65V] 再发布：
-     * 上电时滤波器从 0 爬升、以及瞬时越界都会夹回区间内，下游只取值不再判范围。 */
-    if (st_lpf3.f32Filt10ms <= DAB_BAT_VOLT_MIN)
-    {
-        st_lpf3.f32Filt10ms = DAB_BAT_VOLT_MIN;
+        /* 电池电压三档滤波首拍直接用实测值播种，消除上电从 0V 爬升；
+         * 不做下限 30V 钳位，保留真实欠压/断线值供下游 10ms 快拦截与 100ms 慢保护判定。 */
+        if (s_u16BatVoltSeeded == 0U)
+        {
+            stADC.BatVolt.Filt.f32Filt10ms  = f32BatVolt;
+            stADC.BatVolt.Filt.f32Filt100ms = f32BatVolt;
+            stADC.BatVolt.Filt.f32Filt400ms = f32BatVolt;
+            s_u16BatVoltSeeded = 1U;
+        }
+        else
+        {
+            AdcLpf3Update(&stADC.BatVolt.Filt, f32BatVolt);
+        }
     }
-    else if (st_lpf3.f32Filt10ms >= 65.0f)
-    {
-        st_lpf3.f32Filt10ms = 65.0f;
-    }
-
-    stADC.BatVolt.Filt.f32Filt10ms = st_lpf3.f32Filt10ms;
-
-    stADC.BatVolt.Filt.f32Filt100ms     = st_lpf3.f32Filt100ms;
-    stADC.BatVolt.Filt.f32Filt400ms     = st_lpf3.f32Filt400ms;
 
     AdcLpf3Update(&stADC.BatCurr.Filt, stADC.BatCurr.f32IsrResult);
 
-    /* 功率粗估：PCS 端 400ms 压 × (Ibus1+Ibus2) 400ms */
+    /* 功率粗估：本机继电器 VM 400ms 压 × (Ibus1+Ibus2) 400ms（避免外侧 PCS 电压断线漏保） */
     iAbs = stADC.BusCurr1.Filt.f32Filt400ms + stADC.BusCurr2.Filt.f32Filt400ms;
     if (iAbs < 0.0f)
     {
         iAbs = -iAbs;
     }
-    stADC.f32BusPowerFilt = stADC.PcsBusVolt.Filt.f32Filt400ms * iAbs;
+    stADC.f32BusPowerFilt = stADC.VmBusVolt.Filt.f32Filt400ms * iAbs;
 }

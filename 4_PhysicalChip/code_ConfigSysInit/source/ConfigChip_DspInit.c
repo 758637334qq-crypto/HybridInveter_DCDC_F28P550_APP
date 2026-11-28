@@ -29,7 +29,7 @@ void InitChip_CpuTimerRegs(void)
     // be updated.
 //    CpuTimer0Regs.TCR.all = 0x4000;
 //    CpuTimer1Regs.TCR.all = 0x4000;
-    CpuTimer2Regs.TCR.all = 0x4000;
+    CpuTimer2Regs.TCR.all = 0x4010U;    /* TIE=1、TSS=1 保持停止，留到 main() EINT 前启动 */
 
 }
 

@@ -7,7 +7,7 @@
  *   2) OVP 只配 HP mux，不配 LP（避免 HP 编号误配 LP 表）
  *      → Cmpss_InitHighOnly() 删除 lpMuxSel 参数
  *   3) 滤波：OVP prd=100 窗32/门限24（≈16~22 µs）；
- *            OCP prd=20  窗10/门限6 （≈0.8~1.4 µs，抑开关噪声）
+ *            OCP prd=11  窗10/门限6 （≈0.48~0.80 µs，抑开关噪声）
  *   4) CMPSS 跳闸源：DabCmpss_ReadTripSrc() 一次读回位图，Fault 侧共用置位
  *   5) INSRC_DAC|INV_INVERTED：本库 INSRC=0、INV=0x2，可 OR
  *************************************************************************************************/
@@ -154,7 +154,7 @@ static void Cmpss_InitHighOnly(uint32_t base,
  * 参数：
  *   dacPos   +30 A 阈值 DAC 码
  *   dacNeg   -30 A 阈值 DAC 码（数值 < dacPos）
- *   filtPrd  滤波分频（IDD=20）；窗/门限固定 10/6
+ *   filtPrd  滤波分频（IDD=11）；窗/门限取 DAB_CMPSS_IDD_OCP_FILT_WIN/THR
  * ============================================================================================= */
 static void Cmpss_InitBipolarOcp(uint32_t base,
                                  ASysCtl_CMPHPMuxSelect hpMuxSel,
@@ -182,10 +182,10 @@ static void Cmpss_InitBipolarOcp(uint32_t base,
     CMPSS_setDACValueHigh(base, dacPos);   // +30 A 阈值
     CMPSS_setDACValueLow(base, dacNeg);    // -30 A 阈值
 
-    // ④ 高/低都要滤波：窗10/门限6（10次中≥6次确认，≈0.8~1.4 µs @prd=20）
+    // ④ 高/低都要滤波：窗10/门限6（10次中≥6次确认，≈0.48~0.80 µs @prd=11）
     //    防止开关噪声误触发正/负过流
-    Cmpss_ConfigFilterHighLocal(base, filtPrd, 10U, 6U);
-    Cmpss_ConfigFilterLowLocal(base, filtPrd, 10U, 6U);
+    Cmpss_ConfigFilterHighLocal(base, filtPrd, DAB_CMPSS_IDD_OCP_FILT_WIN, DAB_CMPSS_IDD_OCP_FILT_THR);
+    Cmpss_ConfigFilterLowLocal(base, filtPrd, DAB_CMPSS_IDD_OCP_FILT_WIN, DAB_CMPSS_IDD_OCP_FILT_THR);
     CMPSS_initFilterHigh(base);
     CMPSS_initFilterLow(base);
 
@@ -218,7 +218,7 @@ static void VmbusOvp_Cmpss1_Init(void)
                        DAB_CMPSS_VBUS_OVP_FILT_PRD);// 滤波分频=100
 }
 
-/* 电流1 ±OCP：CMPSS2，A5；prd=20 + 窗10/门限6 → ≈0.8~1.4 µs */
+/* 电流1 ±OCP：CMPSS2，A5；prd=11 + 窗10/门限6 → ≈0.48~0.80 µs */
 static void Idd1Ocp_Cmpss2_Init(void)
 {
     Cmpss_InitBipolarOcp(CMPSS2_BASE,
@@ -227,7 +227,7 @@ static void Idd1Ocp_Cmpss2_Init(void)
                          5U,                         // HP5/LP5 → A5
                          DAB_CMPSS_IDD_OCP_POS_DAC,  // +30 A
                          DAB_CMPSS_IDD_OCP_NEG_DAC,  // -30 A
-                         DAB_CMPSS_IDD_OCP_FILT_PRD);// prd=20，窗/门限见 InitBipolarOcp
+                         DAB_CMPSS_IDD_OCP_FILT_PRD);// prd=11，窗/门限见 DAB_CMPSS_IDD_OCP_FILT_WIN/THR
 }
 
 /* 电流2 ±OCP：CMPSS4，A8；滤波同 IDD1 */
@@ -258,6 +258,9 @@ static void Idd2Ocp_Cmpss4_Init(void)
 static void DabCmpss_EpwmXbarInit(void)
 {
     EALLOW;
+
+    // --- 先清全部使能：软跳（Boot → App 不复位）时残留的 MUX 位会混进 TRIP4 ---
+    EPwmXbarRegs.TRIP4MUXENABLE.all = 0U;
 
     // --- 信号源选择 ---
     EPwmXbarRegs.TRIP4MUX0TO15CFG.bit.MUX0 = 0U;   // CMPSS1：仅 CTRIPH（OVP）
@@ -313,8 +316,8 @@ static void Epwm_AttachTrip4Ost(uint32_t base)
     EPWM_setTripZoneAction(base, EPWM_TZ_ACTION_EVENT_TZB, EPWM_TZ_ACTION_LOW);
     EPWM_setTripZoneAction(base, EPWM_TZ_ACTION_EVENT_DCAEVT1, EPWM_TZ_ACTION_LOW);
 
-    // ⑦ 清残留标志
-    EPWM_clearTripZoneFlag(base, EPWM_TZ_FLAG_OST | EPWM_TZ_FLAG_DCAEVT1);
+    // ⑦ 只清挂接过程可能产生的 DCAEVT1 标志，保留 SetupBase() 已锁定的 OST 硬封波
+    EPWM_clearTripZoneFlag(base, EPWM_TZ_FLAG_DCAEVT1);
 }
 
 /* 8 路 ePWM 全部挂接 TRIP4（双桥各 4 路） */
@@ -425,13 +428,13 @@ void InitChip_CmpssRegs(void)
 {
     // ① 三路比较器
     VmbusOvp_Cmpss1_Init();     // 母线过压（prd=100，窗32/门限24）
-    Idd1Ocp_Cmpss2_Init();      // 电流1 ±30 A（prd=20，窗10/门限6）
+    Idd1Ocp_Cmpss2_Init();      // 电流1 ±30 A（prd=11，窗10/门限6）
     Idd2Ocp_Cmpss4_Init();      // 电流2 ±30 A（同 IDD1）
 
     // ② XBAR + ePWM 挂接
     DabCmpss_EpwmXbarInit();    // 三路 → TRIP4
     DabCmpss_AttachAllDabEpwm();// 8 路 ePWM 响应 TRIP4
 
-    // ③ 清上电残留 CMPSS 锁存与 ePWM TZ（忽略上电噪声）
-    DabCmpss_ClearTrip();
+    // ③ 只清上电残留 CMPSS 滤波锁存，保留 SetupBase() 已锁定的 ePWM OST 硬封波
+    DabCmpss_ClearFilterLatch();
 }

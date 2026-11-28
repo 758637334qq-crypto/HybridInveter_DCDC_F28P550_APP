@@ -43,6 +43,8 @@ Uint16 u16BootSoftwareSubverison;
 Uint16 u16SoftwareVerison;
 Uint16 u16SoftwareSubverison;
 Uint16 u16HardwareVerison =99;
+volatile Uint16 g_u16WdgHbEpwm = 0U;
+volatile Uint16 g_u16WdgHbTmr2 = 0U;
 
 void Software_Version_Handle(void)
 {
@@ -89,6 +91,11 @@ void main(void)
 	EPWMStartTimer();			/* 启动 PWM 时基（SOCA 开始刷新） */
 	Adc_CalibCurrZero();		/* 封波零流下 IDD1/IDD2 各 100 次平均 → 电流过零校准 */
 
+	/* 开中断前先启动 Timer2，再清 ETFLG 并紧贴 EINT 使能 EPWM10 中断，避免校准期间挂起 */
+	CpuTimer2Regs.TCR.all = 0xC020U;	/* 清 TIF + 重装初值 + TSS=0 启动 100us 节拍 */
+	DAB_EPWM_MASTER_REGS.ETCLR.bit.INT = 1U;
+	DAB_EPWM_MASTER_REGS.ETSEL.bit.INTEN = 1U;
+
 	EINT;						/* Enable Global interrupt INTM */
 	ERTM;						/* Enable Global realtime interrupt DBGM */
 
@@ -102,7 +109,12 @@ void main(void)
 	for(;;)
 	{
 		Task_InvokingProcess();		/* TaskOS 五档节拍：100us/1ms/2ms/5ms/50ms */
-		SysCtl_serviceWatchdog();	/* 主循环每圈喂狗，后台卡死则复位 */
+		if ((g_u16WdgHbEpwm != 0U) && (g_u16WdgHbTmr2 != 0U))
+		{
+			g_u16WdgHbEpwm = 0U;
+			g_u16WdgHbTmr2 = 0U;
+			SysCtl_serviceWatchdog();	/* EPWM10 + Timer2 双心跳齐全才喂狗，任一停摆则 420ms 复位 */
+		}
 	}
 }
 

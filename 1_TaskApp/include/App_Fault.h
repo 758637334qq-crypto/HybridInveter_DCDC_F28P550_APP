@@ -49,7 +49,7 @@
 #define FAULT_N_POWER              (20U)      /* 功率过限触发 20 拍 = 100ms */
 #define FAULT_N_POWER_REC          (2000U)    /* 功率过限恢复 2000 拍 = 10s */
 #define FAULT_N_SHORT              (40U)      /* 短路触发 40 拍 = 200ms */
-#define FAULT_N_SHORT_REC          (40U)      /* 短路恢复 40 拍 = 200ms */
+#define FAULT_N_SHORT_REC          (1000U)    /* 短路恢复 1000 拍 = 5s（与下方 30s 锁定窗口设计一致） */
 #define FAULT_N_STUCK              (2000U)    /* 关断电流异常确认 2000 拍 = 10s（置位后不自动恢复） */
 #define FAULT_N_CMPSS_REC          (2000U)    /* CMPSS 单路恢复 2000 拍 = 10s */
 #define FAULT_SCI_TIMEOUT_N        (2000U)    /* SCI 掉线门限：有效 0x00 命令空闲 >= 10s（2000×5ms） */

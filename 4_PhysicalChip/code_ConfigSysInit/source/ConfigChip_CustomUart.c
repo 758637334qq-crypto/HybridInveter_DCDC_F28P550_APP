@@ -39,7 +39,8 @@ void CustomUart_Init(void)
     ScibRegs.SCIHBAUD.bit.BAUD = (baudDiv >> 8) & 0xFFU;
     ScibRegs.SCILBAUD.bit.BAUD = baudDiv & 0xFFU;
 
-    /* 0xE040：开增强 FIFO、释放 TX 复位、清中断标志；TX 中断关闭 */
+    /* TX FIFO 0→1 复位脉冲（0xC040 复位 FIFO，再写 0xE040 释放并清标志），清软跳残留字节 */
+    ScibRegs.SCIFFTX.all = 0xC040U;
     ScibRegs.SCIFFTX.all = 0xE040U;
 
     /* RX：0→1 复位脉冲，清溢出/中断标志，关接收中断（轮询） */

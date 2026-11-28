@@ -113,6 +113,7 @@ bool UartProto_SendPacket(uint16_t addr, uint16_t cmd,
                           const uint16_t *pData, uint16_t len);
 uint32_t UartProto_CmdIdleMs(void); /* 最近有效 0x00 距今毫秒数：App_Fault 的 SCI 掉线判据 */
 uint16_t UartProto_GetHotCmd(void);     /* 0x00 Byte7 bit1：加热命令（App_HeatFilm 查询） */
+void UartProto_ClearHotCmd(void);       /* 清残留加热命令（进/退 Boot 时防失联复开加热膜） */
 uint16_t UartProto_GetPackSum(void);    /* 0x05：电池包总数（App_CurShare 查询） */
 
 #endif /* APP_UART_PROTO_H */

@@ -38,7 +38,7 @@ typedef struct
         Uint16 fastI1Hit;
         Uint16 fastI2Hit;
         Uint16 fastImbHit;
-        Uint16 fastRec[FAST_BIT_COUNT];
+        volatile Uint16 fastRec[FAST_BIT_COUNT];
         Uint16 cmpssVRec;
         Uint16 cmpssI1Rec;
         Uint16 cmpssI2Rec;
@@ -74,7 +74,7 @@ static inline float Fault_Abs(float x)
  * @return 1 = 已连续满足 u16N 拍
  */
 #pragma CODE_SECTION(Fault_Confirm, ".TI.ramfunc");
-static inline Uint16 Fault_Confirm(Uint16 *pu16Cnt, Uint16 u16Hit, Uint16 u16N)
+static inline Uint16 Fault_Confirm(volatile Uint16 *pu16Cnt, Uint16 u16Hit, Uint16 u16N)
 {
     if (u16Hit == 0U)
     {
@@ -121,24 +121,28 @@ void Fault_FastProtect(float f32BusCurr0, float f32BusCurr1,float f32Vbus)
                       FAULT_FAST_OV_N) != 0U)
     {
         stFault.fast |= FAST_MASK_VOUT_OV;
+        stFaultCnt.run.fastRec[FAST_BIT_VOUT_OV] = 0U;
     }
     if (Fault_Confirm(&stFaultCnt.run.fastI1Hit,
                       (Uint16)(Fault_Abs(f32BusCurr0) > FAULT_CH_OC),
                       FAULT_FAST_OC_N) != 0U)
     {
         stFault.fast |= FAST_MASK_I1_OV;
+        stFaultCnt.run.fastRec[FAST_BIT_I1_OV] = 0U;
     }
     if (Fault_Confirm(&stFaultCnt.run.fastI2Hit,
                       (Uint16)(Fault_Abs(f32BusCurr1) > FAULT_CH_OC),
                       FAULT_FAST_OC_N) != 0U)
     {
         stFault.fast |= FAST_MASK_I2_OV;
+        stFaultCnt.run.fastRec[FAST_BIT_I2_OV] = 0U;
     }
     if (Fault_Confirm(&stFaultCnt.run.fastImbHit,
                       Fault_ImbHit(f32BusCurr0, f32BusCurr1),
                       FAULT_FAST_IMB_N) != 0U)
     {
         stFault.fast |= FAST_MASK_IBALANCE;
+        stFaultCnt.run.fastRec[FAST_BIT_IBALANCE] = 0U;
     }
 }
 
@@ -227,7 +231,7 @@ static void Fault_RetryLockTick(RetryLock_t *pLock, Uint16 u16Rising,
 /**
  * @brief 通用"连续 N 拍满足才恢复"计数（快保护 / CMPSS 恢复共用）
  */
-static Uint16 Fault_RecCntTick(Uint16 *pu16Cnt, Uint16 u16BitSet,
+static Uint16 Fault_RecCntTick(volatile Uint16 *pu16Cnt, Uint16 u16BitSet,
                                Uint16 u16Ok, Uint16 u16RecN)
 {
     if (Fault_Confirm(pu16Cnt, (Uint16)((u16BitSet != 0U) && (u16Ok != 0U)), u16RecN) == 0U)
@@ -253,7 +257,8 @@ static void Fault_SlowProtect5ms(float f32Vbus, float f32I0, float f32I1, Uint16
                                    stADC.BusCurr2.Filt.f32Filt100ms);
     float  f32Lim      = __fmin(__fmax(Fault_Abs(Bus.f32Ref) - 2.0f, FAULT_I_SHORT_LO),
                                 FAULT_I_SHORT_HI);
-    Uint16 u16ShortHit = (Uint16)((f32Iabs >= f32Lim) && (f32Vbus < FAULT_VBUS_SHORT));
+    Uint16 u16ShortHit = (Uint16)((SM_IsClosedLoopActive() != 0U) &&
+                                  (f32Iabs >= f32Lim) && (f32Vbus < FAULT_VBUS_SHORT));
     Uint16 u16OtherFault;
     Uint32 u32IdleMs   = UartProto_CmdIdleMs();
     Uint16 u16SciHit   = (Uint16)((u16OpenTest == 0U) &&
@@ -295,14 +300,16 @@ static void Fault_SlowProtect5ms(float f32Vbus, float f32I0, float f32I1, Uint16
                 (Uint16)(u16OtherFault == 0U),
                 FAULT_N_VBUS_UV_REC);
 
-    /* ⑤ 母线短路（不绑 PwmOn） */
+    /* ⑤ 母线短路（仅闭环态判据，防停机 0V 下零漂误报） */
     Fault_Level(&stFaultCnt.run.busShort, FAULT_BIT_SHORT,
                 u16ShortHit, FAULT_N_SHORT,
                 (Uint16)(u16ShortHit == 0U), FAULT_N_SHORT_REC);
 
-    /* ⑥ 关断电流异常（停机后仍有电流；锁存，仅确认置位） */
+    /* ⑥ 关断电流异常（停在 INIT 态后仍有电流；锁存，仅确认置位） */
     if (Fault_Confirm(&stFaultCnt.run.offCurrHit,
-                      (Uint16)((!FAULT_RUN_REQ()) && (f32Islow >= FAULT_I_STUCK)),
+                      (Uint16)((RunState.state == SM_STATE_INIT) &&
+                               (u16OpenTest == 0U) &&
+                               (f32Islow >= FAULT_I_STUCK)),
                       FAULT_N_STUCK) != 0U)
     {
         stFault.alm |= ALM_MASK_OFF_CURR;
@@ -320,7 +327,7 @@ static void Fault_SlowProtect5ms(float f32Vbus, float f32I0, float f32I1, Uint16
  * ========================================================================== */
 
 /**
- * @brief 单路 CMPSS soft 位恢复：条件连续 10s → 清该位 + 仅清本路锁存
+ * @brief 单路 CMPSS soft 位恢复：条件连续 10s → 先清本路硬件锁存并复核实时状态，确认归 0 才清软件位
  */
 static void Fault_CmpssRecTick(Uint32 u32Bit, Uint16 u16Ok, Uint16 *pu16Rec,
                                Uint16 u16LatchSrc)
@@ -329,8 +336,11 @@ static void Fault_CmpssRecTick(Uint32 u32Bit, Uint16 u16Ok, Uint16 *pu16Rec,
                          (Uint16)((stFault.slow & u32Bit) != 0UL),
                          u16Ok, FAULT_N_CMPSS_REC) != 0U)
     {
-        stFault.slow &= ~u32Bit;
         DabCmpss_ClearFilterLatchSrc(u16LatchSrc);
+        if ((DabCmpss_ReadTripSrc() & u16LatchSrc) == 0U)
+        {
+            stFault.slow &= ~u32Bit;
+        }
     }
 }
 
@@ -473,8 +483,8 @@ static void Fault_FastRecover5ms(float f32Vbus, float f32I0, float f32I1)
  */
 void Fault_Init(void)
 {
+    /* Fault_ClearAll() 已清 CMPSS 滤波锁存，保留上电 ePWM OST 硬封波到起机再解 */
     Fault_ClearAll();
-    DabCmpss_ClearTrip();
 }
 
 /** @brief 置位继电器故障位（slow.relay） */

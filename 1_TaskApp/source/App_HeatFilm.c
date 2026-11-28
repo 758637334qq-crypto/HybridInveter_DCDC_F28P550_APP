@@ -5,7 +5,7 @@
  *************************************************************************************************/
 #include "Includes.h"                   // 工程总头文件(GPIO driverlib、类型、HeatFilm_t 定义等)
 
-HeatFilm_t g_stHeatFilm;                // 加热膜全局状态结构体(主循环与中断共享)
+volatile HeatFilm_t g_stHeatFilm;       // 加热膜全局状态结构体(主循环与中断共享，volatile 保序防缓存)
                                         // 成员: enable / dutyPct / onTicksChg / onTicksDis / cnt
 
 /* =============================================================================================
@@ -20,7 +20,7 @@ static Uint16 HeatFilm_CalcOnTicks(Uint16 duty, Uint16 period)
     Uint16 onTicks;                     // 计算结果:高电平节拍数
 
     // 先强转 32 位再相乘,防止 16 位溢出(100×65535 会超 16 位);+50UL 四舍五入;/100 还原百分比
-    onTicks = (Uint16)((duty * period + 50UL) / 100UL);
+    onTicks = (Uint16)(((Uint32)duty * (Uint32)period + 50UL) / 100UL);
 
     if (onTicks > period)               // 保护:duty 异常大时不让高电平节拍数超过周期
     {
@@ -102,10 +102,19 @@ void HeatFilm_SetDutyPct(Uint16 pct0to100)
 
 /* =============================================================================================
  * 函数:HeatFilm_Task   (主循环周期调用)
- * 逻辑:上位机热膜命令 ≠ 0 → 使能并保证有占空比;命令 = 0 → 全部关断
+ * 逻辑:Boot/升级态强制关断（进 Boot 后 AA55 停收，hotCmd 会冻在旧值）；
+ *      否则上位机热膜命令 ≠ 0 → 使能并保证有占空比；命令 = 0 → 全部关断
  * ============================================================================================= */
 void HeatFilm_Task(void)
 {
+    /* 进 Boot 后不再解析 AA55，hotCmd 可能冻在 1；升级态必须保持加热膜关断 */
+    if ((stBootProto.u16BootModeEn != 0U) ||
+        (stBootProto.u16FlashUpdateFlag != 0U))
+    {
+        HeatFilm_Off();
+        return;
+    }
+
     if (UartProto_GetHotCmd() != 0U)    // 读取串口协议解析出的"加热命令"
     {
         HeatFilm_SetEnable(1U);         // 打开 EN 脚,允许中断输出 PWM
@@ -133,23 +142,25 @@ void HeatFilm_Task(void)
 #pragma CODE_SECTION(HeatFilm_Isr, ".TI.ramfunc");     // 本函数链接到 RAM 段(必须写在函数定义之前)
 void HeatFilm_Isr(Uint16 isCharge)
 {
-    Uint16 period;                      // 当前模式的 PWM 周期节拍数
-    Uint16 onTicks;                     // 当前模式的高电平节拍数
+    Uint16 period;                      // 当前载波频率对应的 1kHz 周期节拍数
+    Uint16 onTicks;                     // 当前载波频率对应的高电平节拍数
+
+    (void)isCharge;                     // 按实际载波频率（g_u16DabPwmTicks100us）选周期，INIT 默认 50kHz 也保持 1kHz
 
     if (g_stHeatFilm.enable == 0U)      // 未使能:什么都不做,尽快退出(PWM 脚保持关断时的低电平)
     {
         return;
     }
 
-    if (isCharge != 0U)                 // 充电模式:取充电对应参数
-    {
-        period  = HEAT_FILM_TICKS_CHG;
-        onTicks = g_stHeatFilm.onTicksChg;
-    }
-    else                                // 放电模式:取放电对应参数
+    if (g_u16DabPwmTicks100us == 6U)    // 60kHz 载波（100us=6 拍）:取 60 拍 → 1kHz
     {
         period  = HEAT_FILM_TICKS_DIS;
         onTicks = g_stHeatFilm.onTicksDis;
+    }
+    else                                // 50kHz 载波（含 INIT 态默认 50kHz）:取 50 拍 → 1kHz
+    {
+        period  = HEAT_FILM_TICKS_CHG;
+        onTicks = g_stHeatFilm.onTicksChg;
     }
 
     if (++g_stHeatFilm.cnt >= period)   // 计数加 1,到达周期末尾就回 0 → 新周期开始

@@ -38,16 +38,29 @@
  *
  *   OVP：prd=100，窗32/门限24 → Ts≈0.67 µs，约 16~22 µs
  *        （母线电压变化慢，可以滤得稳一点）
- *   OCP：prd=40， 窗10/门限6  → Ts≈0.28 µs，约 1.6~2.8 µs
- *        （电流上升快，必须更快；但太快又会被开关噪声误触发）
+ *   OCP：prd=11， 窗10/门限6  → Ts=0.08 µs，约 0.48~0.80 µs
+ *        （开关沿毛刺 < 0.40 µs 时最多占 5 个采样，凑不满门限 6，不会误跳）
  * ============================================================================================= */
 #ifndef DAB_CMPSS_VBUS_OVP_FILT_PRD
 #define DAB_CMPSS_VBUS_OVP_FILT_PRD (100U)      // OVP 采样分频：越大越慢越稳
 #endif
 
 #ifndef DAB_CMPSS_IDD_OCP_FILT_PRD
-#define DAB_CMPSS_IDD_OCP_FILT_PRD  (40U)       // OCP 采样分频：小，响应快
+#define DAB_CMPSS_IDD_OCP_FILT_PRD  (11U)       // OCP 采样分频：Ts = 12/150MHz = 0.08 µs
 #endif
+
+#ifndef DAB_CMPSS_IDD_OCP_FILT_WIN
+#define DAB_CMPSS_IDD_OCP_FILT_WIN  (10U)       // OCP 窗口：最慢确认 10 × Ts = 0.80 µs（1~32）
+#endif
+
+#ifndef DAB_CMPSS_IDD_OCP_FILT_THR
+#define DAB_CMPSS_IDD_OCP_FILT_THR  (6U)        // OCP 门限：最快确认 6 × Ts = 0.48 µs（须 > 窗/2）
+#endif
+
+typedef char CmpssOcpFiltCheck_t[((DAB_CMPSS_IDD_OCP_FILT_WIN >= 1U) &&
+                                  (DAB_CMPSS_IDD_OCP_FILT_WIN <= 32U) &&
+                                  (DAB_CMPSS_IDD_OCP_FILT_THR * 2U > DAB_CMPSS_IDD_OCP_FILT_WIN) &&
+                                  (DAB_CMPSS_IDD_OCP_FILT_THR <= DAB_CMPSS_IDD_OCP_FILT_WIN)) ? 1 : -1];
 
 /* =============================================================================================
  * 三、电流窗口阈值（双极性：正向 + 负向）

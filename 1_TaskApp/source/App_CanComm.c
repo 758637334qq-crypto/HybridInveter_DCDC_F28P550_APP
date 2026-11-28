@@ -11,6 +11,7 @@
 #define CAN_SHARE_TX_MAX_MS     (40U)  /* 发送超时取消 ≈ 半周期 */
 #define CAN_TELEMETRY_PERIOD_MS (20U)  /* 0x11 遥测周期 20ms（50 Hz） */
 #define CAN_INIT_RETRY_TICKS    (20U)  /* ★ 5ms × 20 = 100ms */
+#define CAN_SCOPE_TX_MAX_TICKS  (100U) /* 3ms × 100 = 300ms 无 ACK 超时取消并重布防 */
 
 /* ============================================================================
  * 遥测通道调度表（3:1 交织）
@@ -41,6 +42,7 @@ typedef struct
     Uint16 unum;
     Uint16 shareTicks;
     Uint16 scopeTicks;
+    Uint16 scopeWait;       /* 示波器邮箱在途/发送失败等待拍数（每拍 3ms） */
     Uint16 initRetryTicks;
 } CanCommState_t;
 
@@ -93,6 +95,12 @@ void CanComm_Init(void)
 
 void CanComm_SetLocalAddr(uint16_t u16Addr)
 {
+    /* 合法逻辑地址 0~recnum（协议允许首次地址 0）；9~255 拒绝，保留上一组合法分址 */
+    if (u16Addr > (uint16_t)recnum)
+    {
+        return;
+    }
+
     if ((uMdlAddMes.uIndex != u16Addr) ||
         (uMdlAddMes.bCalIDCmd != ADDRcmd_end))
     {
@@ -103,9 +111,21 @@ void CanComm_SetLocalAddr(uint16_t u16Addr)
     }
 }
 
+/* 关中断原子重布防示波器，避免与 EPWM10_ISR 撕写下标 */
+static void CanComm_ScopeRearm(void)
+{
+    uint16_t intm = __disable_interrupts();
+    DataScope.uCurrent_Tran_subscript = 0U;
+    DataScope.uCurrent_Save_subscript = 0U;
+    DataScope.uPreTriggerIdx          = 0U;
+    DataScope.uTran_CMD               = 0U;
+    __restore_interrupts(intm);
+}
+
 /* ============================================================================
  * 示波器分包上传（数据源 = DataScope，存满 900 点锁定后直接读）
  * ★ TXBTO 确认成功后推进 uCurrent_Tran_subscript。请求结束但未成功时重发当前包。
+ * ★ 超过 CAN_SCOPE_TX_MAX_TICKS（300ms）仍未发完/无 ACK 时取消挂起并重布防，防止锁死录波。
  * ★ 包序号塞进 ID 的 ADDR 高 11 位（低 8 位恒为 SCOPEID）。
  * ============================================================================ */
 static void CanComm_SendScope(void)
@@ -115,27 +135,36 @@ static void CanComm_SendScope(void)
     Uint16 u0, u1, u2, u3;
     Uint16 settle;
     Uint16 tx[8];
-    uint16_t intm;
+
+    /* 分址完成前 uIndex=0，多机同 ID 异数据会位冲突进 Bus-Off（同 FillTx41） */
+    if ((uMdlAddMes.bCalIDCmd != ADDRcmd_end) ||
+        (uMdlAddMes.uIndex > (Uint16)recnum))
+    {
+        return;
+    }
 
     if ((s_st.txPendMask & (Uint16)(1U << CAN_TX_BUF_SCOPE)) != 0U)
     {
         settle = CanComm_TxSettle(CAN_TX_BUF_SCOPE, 0, 0);
         if (settle == 0U)
         {
+            if (++s_st.scopeWait >= CAN_SCOPE_TX_MAX_TICKS)
+            {
+                DabCan_CancelTx(CAN_TX_BUF_SCOPE);
+                s_st.txPendMask = (Uint16)(s_st.txPendMask &
+                                           (Uint16)(~(1U << CAN_TX_BUF_SCOPE)));
+                s_st.scopeWait = 0U;
+                CanComm_ScopeRearm();
+            }
             return;
         }
+        s_st.scopeWait = 0U;
         if (settle == 1U)
         {
             DataScope.uCurrent_Tran_subscript++;
             if (DataScope.uCurrent_Tran_subscript >= (Uint16)SCOPENUM)
             {
-                /* ★ 关中断原子重布防，避免与 EPWM10_ISR 撕写下标 */
-                intm = __disable_interrupts();
-                DataScope.uCurrent_Tran_subscript = 0U;
-                DataScope.uCurrent_Save_subscript = 0U;
-                DataScope.uPreTriggerIdx          = 0U;
-                DataScope.uTran_CMD               = 0U;
-                __restore_interrupts(intm);
+                CanComm_ScopeRearm();
                 return;
             }
         }
@@ -163,8 +192,14 @@ static void CanComm_SendScope(void)
                                 uMdlAddMes.uIndex, BORAD_TO, ADDRcmd_end),
                     tx) == 0U)
     {
+        if (++s_st.scopeWait >= CAN_SCOPE_TX_MAX_TICKS)
+        {
+            s_st.scopeWait = 0U;
+            CanComm_ScopeRearm();
+        }
         return;
     }
+    s_st.scopeWait = 0U;
     s_st.txPendMask = (Uint16)(s_st.txPendMask | (Uint16)(1U << CAN_TX_BUF_SCOPE));
 }
 
@@ -339,6 +374,13 @@ static void CanComm_Cmd_0x11(void)
     Uint16 uiRevValueTYP;
     uint32_t u32Payload;
     Uint16 tx[8];
+
+    /* 分址完成前禁止发 0x11：多机 LogADDR=0 同 ID 异载荷 → 位冲突 Bus-Off */
+    if ((uMdlAddMes.bCalIDCmd != ADDRcmd_end) ||
+        (uMdlAddMes.uIndex > (Uint16)recnum))
+    {
+        return;
+    }
 
     if (DabCan_TxReady(CAN_TX_BUF_WATCH) == 0U)
     {

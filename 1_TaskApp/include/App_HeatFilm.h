@@ -28,7 +28,7 @@ typedef struct
     Uint16 cnt;           /* ISR 软 PWM 计数 */
 } HeatFilm_t;
 
-extern HeatFilm_t g_stHeatFilm;
+extern volatile HeatFilm_t g_stHeatFilm;
 
 void HeatFilm_Init(void);
 void HeatFilm_Off(void);

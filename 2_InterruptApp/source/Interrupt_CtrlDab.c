@@ -174,8 +174,10 @@ static inline void Dab_Ctrl_BusVoltLoop(float f32Vo, float f32RefMin, Uint16 u16
         const Uint16 u16BothDutySat = (stDabPi0.u16DutySat != 0U) && (stDabPi1.u16DutySat != 0U);
         const float f32LoadStep = (u16BothDutySat != 0U) ? 0.0f : DAB_BUS_OUT_SLEW_A; // 饱和时冻结步长
 
-        /* 3.4 动态上下轨约束边界计算 */
-        const float f32LimHi = (u16IsCharge != 0U) ? __fmin(f32IPos, BUS_CHG_OUT_MAX) : f32IPos;
+        /* 3.4 动态上下轨约束边界计算
+         * 充电上限固定取 BUS_CHG_OUT_MAX(+1A)，不与 f32IPos 取小（与放电下限取 -1A 对称）：
+         * 禁放(f32IPos=0)时外环仍需越过 0A 触发充电打嗝封波，是否换向由状态机 SM_SEAL_NO_DISCHARGE 拦截。 */
+        const float f32LimHi = (u16IsCharge != 0U) ? BUS_CHG_OUT_MAX : f32IPos;
         const float f32CapLo = (u16IsCharge != 0U) ? __fmax(f32OutMin, Bus.f32Out - f32LoadStep) : f32OutMin;
         const float f32CapHi = (u16IsCharge != 0U) ? f32LimHi : __fmin(f32LimHi, Bus.f32Out + f32LoadStep);
 
@@ -218,8 +220,10 @@ static inline void Dab_Ctrl_BusVoltLoop(float f32Vo, float f32RefMin, Uint16 u16
         Bus.f32Out = __fmax(Bus.f32Out, f32OutMin);
     }
 
-    /* 5. 发送给内环电流环的最终目标参考值 Ref (限幅在 [RefMin, IPos] 之间) */
-    Bus.f32Ref = __fmin((u16IsCharge != 0U) ? __fmax(Bus.f32Out, f32RefMin) : Bus.f32Out, f32IPos);
+    /* 5. 发送给内环电流环的最终目标参考值 Ref（充电：[RefMin, +1A]；放电：<= IPos） */
+    Bus.f32Ref = (u16IsCharge != 0U)
+                 ? __fmin(__fmax(Bus.f32Out, f32RefMin), BUS_CHG_OUT_MAX)
+                 : __fmin(Bus.f32Out, f32IPos);
 }
 
 /*==============================================================================
@@ -442,7 +446,7 @@ static inline float Dab_Ctrl_DisGainSched(float f32DutyU)
  * 关波 / 甩载 / NaN 由上层打嗝门一拍清零（含 f32DutyFf），进来后只处理正给定。
  */
 #pragma FUNC_ALWAYS_INLINE(Dab_Ctrl_DisCurrLoop);
-static inline void Dab_Ctrl_DisCurrLoop(ST_DAB_PI *pstPi, ST_DAB_DUTY *pstDuty,
+static inline void Dab_Ctrl_DisCurrLoop(volatile ST_DAB_PI *pstPi, volatile ST_DAB_DUTY *pstDuty,
                                         float f32Current, float f32DffBase)
 {
     /* =========================================================================
@@ -575,7 +579,7 @@ static inline void Dab_Ctrl_DisDutyMap(float f32Duty, float *pf32HvDuty, float *
 /* SR 状态清零（全工程唯一清单：新增 SR 字段只改这里）。
  * 换向/打嗝复位、占空比归零两处共用，防止残留使能小流量倒流。 */
 #pragma FUNC_ALWAYS_INLINE(Dab_Ctrl_SrClear);
-static inline void Dab_Ctrl_SrClear(ST_DAB_DUTY *pstDuty)
+static inline void Dab_Ctrl_SrClear(volatile ST_DAB_DUTY *pstDuty)
 {
     pstDuty->u16SrEnable = 0U;
     pstDuty->u16SrOnCnt  = 0U;
@@ -586,7 +590,7 @@ static inline void Dab_Ctrl_SrClear(ST_DAB_DUTY *pstDuty)
 /* 清本路内环输出（快断 / 换向 / 充放电打嗝共用）。
  * 电压外环（Bus）不动，解封后不用从头爬。 */
 #pragma FUNC_ALWAYS_INLINE(Dab_Ctrl_ChgOutputReset);
-static inline void Dab_Ctrl_ChgOutputReset(ST_DAB_PI *pstPi, ST_DAB_DUTY *pstDuty)
+static inline void Dab_Ctrl_ChgOutputReset(volatile ST_DAB_PI *pstPi, volatile ST_DAB_DUTY *pstDuty)
 {
     pstPi->f32Out     = 0.0f;   /* 电流环 PI 输出 */
     pstPi->f32Err1    = 0.0f;   /* 上拍误差 */
@@ -607,9 +611,10 @@ static inline void Dab_Ctrl_OutputReset(void)
  *   关断——否定式，任一拍跌破下限（含 NaN）当拍即撤。滤波值有滞后，
  *         滞后期间电流已回流，外环会失去控制权，所以必须用瞬时量；
  *   开通——要求连续 N 拍都过开通门限，避免纹波/噪声导致反复开关；
- *   软起——使能后前 N 拍窗口按 1/N 线性放开，把万一误开的冲击摊到几拍里。 */
+ *   软起——使能后每拍独立往上加（含回差带），避免卡在半开窗口；
+ *   回差带——已使能则保持到 <OFF；未使能只清开通计数，重开须重新连满 N 拍。 */
 #pragma FUNC_ALWAYS_INLINE(Dab_Ctrl_SrStateUpdate);
-static inline void Dab_Ctrl_SrStateUpdate(ST_DAB_DUTY *pstDuty, float f32InstW)
+static inline void Dab_Ctrl_SrStateUpdate(volatile ST_DAB_DUTY *pstDuty, float f32InstW)
 {
     if (!(f32InstW >= DAB_SR_OFF_INST_W))
     {
@@ -626,15 +631,17 @@ static inline void Dab_Ctrl_SrStateUpdate(ST_DAB_DUTY *pstDuty, float f32InstW)
         if (pstDuty->u16SrOnCnt >= DAB_SR_ON_CNT)
         {
             pstDuty->u16SrEnable = 1U;
-            if (pstDuty->u16SrSoft < DAB_SR_SOFT_CNT)
-            {
-                pstDuty->u16SrSoft++;
-            }
         }
     }
-    else
+    else if (pstDuty->u16SrEnable == 0U)
     {
-        pstDuty->u16SrOnCnt = 0U;   /* 回差带内保持现状，但重开要重新计数 */
+        pstDuty->u16SrOnCnt = 0U;   /* 未使能时进回差：重开要重新连满 N 拍 */
+    }
+
+    /* 已使能则软起继续爬满，不绑在 ≥ON 分支，避免 [OFF,ON) 半开冻住 */
+    if ((pstDuty->u16SrEnable != 0U) && (pstDuty->u16SrSoft < DAB_SR_SOFT_CNT))
+    {
+        pstDuty->u16SrSoft++;
     }
 }
 
@@ -661,7 +668,7 @@ static inline void Dab_Ctrl_SrStateUpdate(ST_DAB_DUTY *pstDuty, float f32InstW)
  * 单极性控制：实测幅值低于给定(e>0)就加力，高于给定(e<0)就收。
  * 误差直接写成 e = f32Iref + f32Curr（f32Curr 充电为负，加号即减幅值）。 */
 #pragma FUNC_ALWAYS_INLINE(Dab_Ctrl_ChgPiStep);
-static inline float Dab_Ctrl_ChgPiStep(ST_DAB_PI *pstPi, float f32Curr,
+static inline float Dab_Ctrl_ChgPiStep(volatile ST_DAB_PI *pstPi, float f32Curr,
                                        const ST_DAB_CHG_CTX *pstCtx)
 {
     /* ① 本拍给定幅值(A，恒正)：外环算成 max(−0.5·Bus.f32Ref, 0.02) 再被任务限流 fmin 压住。 */
@@ -713,8 +720,8 @@ static inline float Dab_Ctrl_ChgPiStep(ST_DAB_PI *pstPi, float f32Curr,
 /* 充电单路电流环（本拍动作）：① 电流域 PI 出 i_cmd ② 开方逆模型出占空比 ③ SR 判据。
  * 谁决定模式：Dab_Ctrl_Loop 的上层状态机；本函数只管本拍占空比和 SR，不再判发波条件。 */
 #pragma FUNC_ALWAYS_INLINE(Dab_Ctrl_ChgCurrLoop);
-static inline void Dab_Ctrl_ChgCurrLoop(const ST_DAB_CHG_CTX *pstCtx, ST_DAB_PI *pstPi,
-                                        ST_DAB_DUTY *pstDuty, float f32Curr)
+static inline void Dab_Ctrl_ChgCurrLoop(const ST_DAB_CHG_CTX *pstCtx, volatile ST_DAB_PI *pstPi,
+                                        volatile ST_DAB_DUTY *pstDuty, float f32Curr)
 {
     /* 本拍占空比上限：绝对上限 0.43 / ZCS 允许 / 峰值电流允许 三者取小，Main 每拍算好。
      * 母线越高、压差越小，它能给的上限越低——是“能开多宽”，不是保护阈值。 */
@@ -766,8 +773,8 @@ static inline void Dab_Ctrl_ChgCurrLoop(const ST_DAB_CHG_CTX *pstCtx, ST_DAB_PI 
 /*==============================================================================
  * ④ 顶层控制步：工况快照 → 充电包络 → 外环 → 内环
  *
- * 电池电压统一取 10ms 滤波值（已夹在 [DAB_BAT_VOLT_MIN, 65V] 内）；
- * 瞬时值只给 EPWM10_ISR 的快保护用，不进控制计算。
+ * 电池电压统一取未限幅 10ms 滤波值；低于 DAB_BAT_VOLT_MIN 时充电能力归零、
+ * 放电前馈归零；瞬时值只给 EPWM10_ISR 的快保护用，不进控制计算。
  *============================================================================*/
 #pragma FUNC_ALWAYS_INLINE(Dab_Ctrl_Loop);
 static inline void Dab_Ctrl_Loop(Uint16 u16IsCharge, Uint16 u16HoldOff)
@@ -786,22 +793,27 @@ static inline void Dab_Ctrl_Loop(Uint16 u16IsCharge, Uint16 u16HoldOff)
 
     if (u16IsCharge != 0U)
     {
+        const float f32Vbat   = stADC.BatVolt.Filt.f32Filt10ms;
         const float f32VbusPk = __fmax(f32Vslow, f32VbusRaw);
-        float f32DutyMax;
-        float f32ChgImax;
+        float f32DutyMax = 0.0f;
+        float f32ChgImax = 0.0f;
         float f32CapFilt;
 
-        f32E  = DAB_TURNS_RATIO * stADC.BatVolt.Filt.f32Filt10ms;
+        f32E  = DAB_TURNS_RATIO * f32Vbat;
         f32Dv = f32Vslow - f32E;
 
-        /* 用较高的母线电压核算 ZCS 和峰值电流上限。 */
-        f32DutyMax = __fmin(DAB_CHG_D_LOW_MAX,
-                            __fmin(__divf32(DAB_CHARGE_ZCS_MAX * f32E, f32VbusPk),
-                                   __divf32(DAB_CHARGE_IPK_MAX * DAB_CHARGE_KFL_MIN,
-                                            __fmax(f32VbusPk - f32E, 1.0f))));
+        /* 电池欠压或母线不高于 n·Vbat 时无充电能力，直接归零并跳过除法。 */
+        if ((f32Vbat >= DAB_BAT_VOLT_MIN) && (f32Dv > 0.0f))
+        {
+            /* 用较高的母线电压核算 ZCS 和峰值电流上限（进分支已有 f32VbusPk >= f32Vslow > f32E >= 240V）。 */
+            f32DutyMax = __fmin(DAB_CHG_D_LOW_MAX,
+                                __fmin(__divf32(DAB_CHARGE_ZCS_MAX * f32E, f32VbusPk),
+                                       __divf32(DAB_CHARGE_IPK_MAX * DAB_CHARGE_KFL_MIN,
+                                                __fmax(f32VbusPk - f32E, 1.0f))));
 
-        /* 母线侧两桥能力用慢压差和标称漏感计算，下降直跟，上升限步。 */
-        f32ChgImax = (float)DAB_BRIDGE_NUM * f32Dv * f32DutyMax * f32DutyMax * DAB_CHARGE_INV_KFL;
+            /* 母线侧两桥能力用慢压差和标称漏感计算，下降直跟，上升限步。 */
+            f32ChgImax = (float)DAB_BRIDGE_NUM * f32Dv * f32DutyMax * f32DutyMax * DAB_CHARGE_INV_KFL;
+        }
         f32CapFilt = __fmin(__fmax(f32ChgImax, 0.0f),
                             g_stDabIsrState.f32CapFilt + DAB_CHARGE_CAP_RISE_A);
         g_stDabIsrState.f32CapFilt = f32CapFilt;
@@ -878,7 +890,7 @@ static inline void Dab_Ctrl_Loop(Uint16 u16IsCharge, Uint16 u16HoldOff)
         stChgCtx.f32Vslow = f32Vslow;
         stChgCtx.f32InvDv = __divf32(1.0f, __fmax(f32Dv, 1.0f));
 
-        /* SR 取较低母线电压，两桥共用。 */
+        /* SR 取较低母线电压，两桥共用（能走到此处已有 u16ChgBuckOn=1 ⇒ f32E >= 240V）。 */
         stDabParam.f32SrRatio = __divf32(__fmin(f32Vslow, f32VbusRaw), f32E);
 
         Dab_Ctrl_ChgCurrLoop(&stChgCtx, &stDabPi0, &stDabDuty0, f32I0);
@@ -1005,14 +1017,15 @@ static inline Uint16 Dab_Pwm_ChgUpdate(volatile struct EPWM_REGS *pstP1,
 
 /* 放电发波：HV 两臂占空比可不对称（移相调功），LV 接近 50% 方波。
  *   d_hv ≤ 50%：c4 = ticks，c2 = TBPRD - ticks，内部比较点用 CLEAR 关断；
- *   d_hv > 50%：内部动作改 NO_ACTION，脉冲连在一起，等效占空比 > 50%。 */
+ *   d_hv > 50%：内部动作改 NO_ACTION，脉冲连在一起，等效占空比 > 50%。
+ * 返回 1 = 本桥在发波；0 = 已立即强制低（打嗝/零指令不走 CMP=TBPRD+GLD@ZERO）。 */
 #pragma FUNC_ALWAYS_INLINE(Dab_Pwm_DisUpdate);
-static inline void Dab_Pwm_DisUpdate(volatile struct EPWM_REGS *pstP1,
-                                     volatile struct EPWM_REGS *pstP2,
-                                     volatile struct EPWM_REGS *pstP3,
-                                     volatile struct EPWM_REGS *pstP4,
-                                     float f32HvDuty, float f32LvDuty,
-                                     volatile DabAqLast_t *pstAqLast)
+static inline Uint16 Dab_Pwm_DisUpdate(volatile struct EPWM_REGS *pstP1,
+                                       volatile struct EPWM_REGS *pstP2,
+                                       volatile struct EPWM_REGS *pstP3,
+                                       volatile struct EPWM_REGS *pstP4,
+                                       float f32HvDuty, float f32LvDuty,
+                                       volatile DabAqLast_t *pstAqLast)
 {
     Uint16 u16DutyTicksTmp;
     Uint16 u16S2HvNegCmpTmp;
@@ -1027,6 +1040,21 @@ static inline void Dab_Pwm_DisUpdate(volatile struct EPWM_REGS *pstP1,
     /* 硬限幅：杜绝负数转 Uint16（未定义行为）和 TBPRD-CMP 下溢 */
     f32HvDuty = DAB_SAT(f32HvDuty, 0.0f, DAB_HV_DUTY_HARD_MAX);
     f32LvDuty = DAB_SAT(f32LvDuty, 0.0f, DAB_LV_DUTY_HARD_MAX);
+
+    /* 零发波：立即 AQCSFRC 强制低，避开升压段关波时 S2 的 CMP=TBPRD 与 GLD@ZERO 竞争 */
+    if (!(f32HvDuty >= DAB_DUTY_MIN))
+    {
+        pstP1->AQSFRC.bit.RLDCSF = 3U;
+        pstP1->AQCSFRC.all = 0x0005U;
+        pstP2->AQSFRC.bit.RLDCSF = 3U;
+        pstP2->AQCSFRC.all = 0x0005U;
+        pstP3->AQSFRC.bit.RLDCSF = 3U;
+        pstP3->AQCSFRC.all = 0x0005U;
+        pstP4->AQSFRC.bit.RLDCSF = 3U;
+        pstP4->AQCSFRC.all = 0x0005U;
+        pstAqLast->all = DAB_PWM_STATE_RESET;
+        return 0U;
+    }
 
     u16DutyTicksTmp    = (Uint16)(2.0f * f32HvDuty * (float)DAB_DIS_TBPRD + 0.5f);
     u16S5S8LvCmpTmp    = (Uint16)(2.0f * f32LvDuty * (float)DAB_DIS_TBPRD + 0.5f);
@@ -1051,35 +1079,47 @@ static inline void Dab_Pwm_DisUpdate(volatile struct EPWM_REGS *pstP1,
     /* 打嗝时边界强写 CLEAR，防止残留窄脉冲 */
     u16BoundaryActTmp = (u16S1S4HvActTmp == AQ_NO_ACTION) ? AQ_CLEAR : u16InnerActTmp;
 
-    /* 三组动作值都没变就一次 AQ 都不碰（稳态绝大多数拍）；
-     * 任一变则整块重写，并记下本次写入的三个值。 */
-    if ((u16S1S4HvActTmp != pstAqLast->bit.u16S1S4Act) ||
-        (u16S5S8LvActTmp != pstAqLast->bit.u16S5S8Act) ||
-        (u16InnerActTmp  != pstAqLast->bit.u16InnerAct))
+    /* 解封首拍（phase==0）：本拍只写影子，下一 ZERO 才与解封一起装载。
+     * 升压区稳态 S2 为 PRD=SET / ZRO=NO_ACTION；强封期间 TBCTR 仍跑，
+     * PRD 可把 AQ 内部锁存置高而引脚被压低。若首拍影子仍写 ZRO=NO_ACTION，
+     * 装载沿解封后残留高直接上管脚，与 S4 开通区重叠（openTest 800→0→800）。
+     * 首拍影子改 ZRO=CLEAR，装载沿先清锁存；InnerAct 记作废逼下一拍重写回 NO_ACTION。 */
     {
-        pstP2->AQCTLB.bit.CBU = u16InnerActTmp;      /* S4 上数比较关断 */
-        pstP2->AQCTLB.bit.PRD = u16BoundaryActTmp;   /* S4 PRD 边界 */
-        pstP2->AQCTLB.bit.ZRO = u16S1S4HvActTmp;     /* S4 ZRO 开通 */
+        const Uint16 u16FirstBeatTmp = (pstAqLast->bit.u16Phase == 0U) ? 1U : 0U;
+        const Uint16 u16S2ZroActTmp  = (u16FirstBeatTmp != 0U) ? AQ_CLEAR : u16BoundaryActTmp;
 
-        pstP1->AQCTLB.bit.CBD = u16InnerActTmp;      /* S2 下数比较关断 */
-        pstP1->AQCTLB.bit.ZRO = u16BoundaryActTmp;   /* S2 ZRO 边界 */
-        pstP1->AQCTLB.bit.PRD = u16S1S4HvActTmp;     /* S2 PRD 开通 */
-
-        /* 另一路比较点仅在正常区间写；超调区“保持不写”≠“写 NO_ACTION” */
-        if (u16InnerActTmp == AQ_CLEAR)
+        /* 三组动作值都没变就一次 AQ 都不碰（稳态绝大多数拍）；
+         * 任一变或解封首拍则整块重写，并记下本次写入的三个值。 */
+        if ((u16S1S4HvActTmp != pstAqLast->bit.u16S1S4Act) ||
+            (u16S5S8LvActTmp != pstAqLast->bit.u16S5S8Act) ||
+            (u16InnerActTmp  != pstAqLast->bit.u16InnerAct) ||
+            (u16FirstBeatTmp != 0U))
         {
-            pstP2->AQCTLB.bit.CBD = AQ_CLEAR;
-            pstP1->AQCTLB.bit.CBU = AQ_CLEAR;
+            pstP2->AQCTLB.bit.CBU = u16InnerActTmp;      /* S4 上数比较关断 */
+            pstP2->AQCTLB.bit.PRD = u16BoundaryActTmp;   /* S4 PRD 边界 */
+            pstP2->AQCTLB.bit.ZRO = u16S1S4HvActTmp;     /* S4 ZRO 开通 */
+
+            pstP1->AQCTLB.bit.CBD = u16InnerActTmp;      /* S2 下数比较关断 */
+            pstP1->AQCTLB.bit.ZRO = u16S2ZroActTmp;      /* S2 ZRO：首拍 CLEAR / 其后跟边界 */
+            pstP1->AQCTLB.bit.PRD = u16S1S4HvActTmp;     /* S2 PRD 开通 */
+
+            /* 另一路比较点仅在正常区间写；超调区“保持不写”≠“写 NO_ACTION” */
+            if (u16InnerActTmp == AQ_CLEAR)
+            {
+                pstP2->AQCTLB.bit.CBD = AQ_CLEAR;
+                pstP1->AQCTLB.bit.CBU = AQ_CLEAR;
+            }
+
+            pstP3->AQCTLA.bit.ZRO = u16S5S8LvActTmp;     /* S5 */
+            pstP4->AQCTLB.bit.ZRO = u16S5S8LvActTmp;     /* S8 */
+            pstP3->AQCTLB.bit.PRD = u16S5S8LvActTmp;     /* S6 */
+            pstP4->AQCTLA.bit.PRD = u16S5S8LvActTmp;     /* S7 */
+
+            pstAqLast->bit.u16S1S4Act  = u16S1S4HvActTmp;
+            pstAqLast->bit.u16S5S8Act  = u16S5S8LvActTmp;
+            /* 首拍记 3=作废，下一拍必重写，把 ZRO 从 CLEAR 收回真实边界动作 */
+            pstAqLast->bit.u16InnerAct = (u16FirstBeatTmp != 0U) ? 3U : u16InnerActTmp;
         }
-
-        pstP3->AQCTLA.bit.ZRO = u16S5S8LvActTmp;     /* S5 */
-        pstP4->AQCTLB.bit.ZRO = u16S5S8LvActTmp;     /* S8 */
-        pstP3->AQCTLB.bit.PRD = u16S5S8LvActTmp;     /* S6 */
-        pstP4->AQCTLA.bit.PRD = u16S5S8LvActTmp;     /* S7 */
-
-        pstAqLast->bit.u16S1S4Act  = u16S1S4HvActTmp;
-        pstAqLast->bit.u16S5S8Act  = u16S5S8LvActTmp;
-        pstAqLast->bit.u16InnerAct = u16InnerActTmp;
     }
 
     pstP1->CMPB.bit.CMPB = u16S2HvNegCmpTmp;
@@ -1091,6 +1131,7 @@ static inline void Dab_Pwm_DisUpdate(volatile struct EPWM_REGS *pstP1,
 
     /* 放电时 S1/S3 保持强制低。 */
     Dab_Pwm_Commit(pstP1, pstP2, pstP3, pstP4, pstAqLast, 0x0001U);
+    return 1U;
 }
 
 /*==============================================================================
@@ -1208,17 +1249,24 @@ static inline void Dab_Ctrl_fun(Uint16 u16IsCharge)
         }
 
         Dab_Ctrl_DisDutyMap(f32D0, &f32Hv, &f32Lv);
-        Dab_Pwm_DisUpdate(&DabEpwm1Regs, &DabEpwm2Regs, &DabEpwm3Regs, &DabEpwm4Regs,
-                          f32Hv, f32Lv, &g_stDabIsrState.stChgAqBr1);
+        if (Dab_Pwm_DisUpdate(&DabEpwm1Regs, &DabEpwm2Regs, &DabEpwm3Regs, &DabEpwm4Regs,
+                              f32Hv, f32Lv, &g_stDabIsrState.stChgAqBr1) != 0U)
+        {
+            g_stDabIsrState.stChgAqBr1.bit.u16Phase = 1U;
+        }
         if (u16OpenTest == 0U)
         {
             Dab_Ctrl_DisDutyMap(f32D1, &f32Hv, &f32Lv);
         }
-        Dab_Pwm_DisUpdate(&DabEpwm1bRegs, &DabEpwm2bRegs, &DabEpwm3bRegs, &DabEpwm4bRegs,
-                          f32Hv, f32Lv, &g_stDabIsrState.stChgAqBr2);
+        if (Dab_Pwm_DisUpdate(&DabEpwm1bRegs, &DabEpwm2bRegs, &DabEpwm3bRegs, &DabEpwm4bRegs,
+                              f32Hv, f32Lv, &g_stDabIsrState.stChgAqBr2) != 0U)
+        {
+            g_stDabIsrState.stChgAqBr2.bit.u16Phase = 1U;
+        }
+        return;
     }
 
-    /* 两桥常量均已按本拍相位写完/确认，置 1 供下一拍跳过常量写 */
+    /* 充电：两桥常量写完后置 phase=1，供下一拍跳过常量写 */
     g_stDabIsrState.stChgAqBr1.bit.u16Phase = 1U;
     g_stDabIsrState.stChgAqBr2.bit.u16Phase = 1U;
     return;
@@ -1304,9 +1352,6 @@ interrupt void EPWM10_ISR(void)
     /* ① 快保护：只判断置位（母线过压取继电器 VM 瞬时值 f32Vbus，桥侧 VBUS1/VBUS2 不参与） */
     Fault_FastProtect(f32I0, f32I1, f32Vbus);
 
-    /* 加热膜 1kHz 软 PWM（仅翻转） */
-    HeatFilm_Isr(u16IsCharge);
-
     /* 外环相位 0，陷波相位 4；分频随已装载的 PWM 周期走 */
     if (++Bus.u16Tick >= g_u16DabPwmTicks100us)
     {
@@ -1317,11 +1362,14 @@ interrupt void EPWM10_ISR(void)
         Notch2f_Isr();
     }
 
-    /* 软件示波器：64 点预触发环 + 触发后线性存满 900 点（只存数与比较） */
-    DabScope_Sample(f32I0, f32I1);
-
     /* ② 控制 + 发波（含封波门、方向门） */
     Dab_Ctrl_fun(u16IsCharge);
+
+    /* 非关键热路径（加热膜软 PWM + 软件示波器）放在发波提交之后 */
+    HeatFilm_Isr(u16IsCharge);
+    DabScope_Sample(f32I0, f32I1);
+
+    g_u16WdgHbEpwm = 1U;                      /* 看门狗心跳：EPWM10 控制中断存活 */
 
     /* ③ 应答 */
     DabEpwm1Regs.ETCLR.bit.INT = 1U;          /* EPWM10 ZERO */

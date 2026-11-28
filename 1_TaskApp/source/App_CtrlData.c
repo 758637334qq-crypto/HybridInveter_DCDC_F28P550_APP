@@ -77,9 +77,9 @@ volatile ST_DAB_PARAM stDabParam;
 // volatile：ISR 也要读，编译器不许把它缓存在寄存器里。
 volatile ST_DAB_BUS   Bus;
 // 电压外环运行态：误差、积分、输出、总电流给定，只在 ISR 里算。
-ST_DAB_PI             stDabPi0, stDabPi1;
+volatile ST_DAB_PI    stDabPi0, stDabPi1;
 // 两路桥各承担总电流的一半，所以一人一份内环。
-ST_DAB_DUTY           stDabDuty0, stDabDuty1;
+volatile ST_DAB_DUTY  stDabDuty0, stDabDuty1;
 // 两路桥各自的发波记忆：占空比、同步整流占空比、SR 使能/计数。
 
 volatile ST_DAB_RAMP  Ramp;
@@ -147,7 +147,7 @@ static inline void sRampWrite(float f32V, float f32Pos, float f32Neg,
 /*==============================================================================
  * 环路与发波复位
  *============================================================================*/
-static void sBridgeResetOne(ST_DAB_PI *pstPi, ST_DAB_DUTY *pstDuty,
+static void sBridgeResetOne(volatile ST_DAB_PI *pstPi, volatile ST_DAB_DUTY *pstDuty,
                             float f32K1, float f32K2)
                             // 【函数解析】复位一路桥：清内环记忆 + 清发波记忆 + 装增益，封波时调用。
                             // 增量式 PI：Δu = K1·e(k) − K2·e(k−1)，K1 = Kp + Ki·Ts，K2 = Kp。

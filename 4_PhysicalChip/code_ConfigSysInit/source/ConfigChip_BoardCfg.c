@@ -9,7 +9,7 @@ static void Board_InitPeripheralClocks(void)
 {
     EALLOW;
     CpuSysRegs.PCLKCR0.bit.CPUTIMER2 = 1U;
-    CpuSysRegs.PCLKCR0.bit.TBCLKSYNC = 1U;
+    /* TBCLKSYNC 留给 EPWMStartTimer() 在全部软件初始化完成后唯一开启 */
 
     /* 桥1 */
     CpuSysRegs.PCLKCR2.bit.EPWM3  = 1U;
@@ -110,8 +110,8 @@ static void Board_CfgOutLow(uint32_t pinCfg, uint16_t gpio)
 {
     GPIO_setPinConfig(pinCfg);
     GPIO_setPadConfig(gpio, GPIO_PIN_TYPE_STD);
-    GPIO_setDirectionMode(gpio, GPIO_DIR_MODE_OUT);
     GPIO_writePin(gpio, 0U);
+    GPIO_setDirectionMode(gpio, GPIO_DIR_MODE_OUT);
 }
 
 /* 全部数字 DO：复用/方向/初值；App 层只负责 writePin */
@@ -161,17 +161,37 @@ static void Board_InitAnalogGpio(void)
     Board_CfgAdcPin(GPIO_226_GPIO226, 226U); /* B2/C6   → ADCC HV_NTC（采 C6） */
     Board_CfgAdcPin(GPIO_28_GPIO28,    28U); /* A16/C16 → ADCC BATT_NTC（采 C16） */
     Board_CfgAdcPin(GPIO_224_GPIO224, 224U); /* A2/C9   → ADCC MODEL2（采 C9） */
+    Board_CfgAdcPin(GPIO_242_GPIO242, 242U); /* B3      → ADCB MODEL1（AGPIO，须开模拟） */
     EDIS;
+}
+
+/**
+ * AGPIO 数字脚先关模拟：TI 的 Device_initGPIO() 每次启动都会清 AGPIOCTRLA/B，
+ * 本工程改用 InitGpio() 后少了这一步。软跳（Boot → App 不复位）时若残留模拟位，
+ * PWM/继电器脚会停在模拟侧（片上波形照跑、引脚不动）。这里按本板用途兜底一次。
+ * GPIO28 是 BATT_NTC 模拟输入，不能清。
+ */
+static void Board_CfgAnalogPinsDigital(void)
+{
+    GPIO_setAnalogMode(11U, GPIO_ANALOG_DISABLED);  /* RELAY_BUS2N */
+    GPIO_setAnalogMode(12U, GPIO_ANALOG_DISABLED);  /* EPWM7_A：桥2 BUS 左臂 */
+    GPIO_setAnalogMode(13U, GPIO_ANALOG_DISABLED);  /* EPWM7_B：桥2 BUS 左臂 */
+    GPIO_setAnalogMode(16U, GPIO_ANALOG_DISABLED);  /* EPWM9_A：桥2 BUS 右臂 */
+    GPIO_setAnalogMode(17U, GPIO_ANALOG_DISABLED);  /* EPWM9_B：桥2 BUS 右臂 */
+    GPIO_setAnalogMode(20U, GPIO_ANALOG_DISABLED);  /* EPWM12_A：桥1 BUS 右臂 */
+    GPIO_setAnalogMode(21U, GPIO_ANALOG_DISABLED);  /* EPWM12_B：桥1 BUS 右臂 */
+    GPIO_setAnalogMode(33U, GPIO_ANALOG_DISABLED);  /* RELAY_BUS2P */
 }
 
 void Board_Init(void)
 {
+    Board_CfgAnalogPinsDigital();   /* 先关残留模拟位，后面再按需打开 ADC 脚 */
     Board_InitPeripheralClocks();
     Board_InitAnalogReference();
+    Board_InitDigitalOut();  /* 继电器 / DRV / 软启 / 加热膜：先拉低安全态，早于 PWM 复用 */
     Board_InitEpwmGpio();
     Board_InitMcanGpio();
     Board_InitSciGpio();
-    Board_InitDigitalOut();  /* 继电器 / DRV / 软启 / 加热膜：脚配置 */
     Board_InitAnalogGpio();
     AppGpio_Init();          /* App：功率侧安全态 */
     HeatFilm_Init();         /* App：加热膜软件状态 */
@@ -190,10 +210,38 @@ static void Board_PwmPinToGpioIn(uint32_t pinCfg, uint16_t gpio)
 
 void Board_PrepareForBoot(void)
 {
+    uint16_t u16Wait = 0U;
+
     DAB_PWM_OstStop();
     DAB_PWM_Stop();
 
     AppGpio_SafeOff();
+
+    /* 停掉周期中断源与时基、MCAN 退回 SW_INIT、清空 PIE/IER/IFR，
+     * 防止软跳 Boot 后在 Boot 开 EINT 时冲回 APP 旧中断（软跳不复位外设） */
+    EALLOW;
+    CpuSysRegs.PCLKCR0.bit.TBCLKSYNC = 0U;
+    EDIS;
+    DAB_EPWM_MASTER_REGS.ETSEL.bit.INTEN   = 0U;
+    DAB_EPWM_MASTER_REGS.ETSEL.bit.SOCAEN  = 0U;
+    DAB_EPWM_MASTER_REGS.ETCLR.bit.INT     = 1U;
+    DAB_EPWM_MASTER2_REGS.ETSEL.bit.SOCAEN = 0U;
+    CpuTimer2Regs.TCR.all = 0x8010U;    /* 清 TIF + 关 TIE + TSS=1 停 100us 节拍 */
+    MCAN_setOpMode(MCANA_DRIVER_BASE, MCAN_OPERATION_MODE_SW_INIT);
+    InitPieCtrl();
+    IER = 0x0000U;
+    IFR = 0x0000U;
+
+    /* 带超时等 SCIB 在途字节发完（上限 3ms 防死等），复位 FIFO 供 Boot 干净握手 */
+    while ((ScibRegs.SCICTL2.bit.TXEMPTY == 0U) && (u16Wait < 30U))
+    {
+        DEVICE_DELAY_US(100U);
+        u16Wait++;
+    }
+    ScibRegs.SCIFFTX.bit.TXFIFORESET = 0U;
+    ScibRegs.SCIFFTX.bit.TXFIFORESET = 1U;
+    ScibRegs.SCIFFRX.bit.RXFIFORESET = 0U;
+    ScibRegs.SCIFFRX.bit.RXFIFORESET = 1U;
 
     EALLOW;
     /* PWM 脚改回普通输入，避免复位窗口误驱动；SCIB(GPIO14/15) 保留 ARM 通讯 */

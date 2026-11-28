@@ -267,7 +267,7 @@ static void sCmd00Run(const uint16_t *d)
     cmd.bit.ReCharDcdcOn  = ((ctrl >> 7) & 0x01U) ? 0U : 1U;   /* bit7 禁止放电：1 → 关放电使能 */
 
     /* 运行模式 mode（协议 4.1.2）：
-     * bit0 TestCmd | bit1 BmsMode | bit2 bClearFault | bit3 bAdi，其余保留填 0 */
+     * bit0 TestCmd | bit1 BmsMode | bit2 bClearFault | bit3 bAdj | bit4 upboot，其余保留填 0 */
     cmd.bit.openTest = mode & 0x0001U;
     sstBmsData.u16BmsMode    = (mode >> 1) & 0x0001U;
     if ((mode & 0x0004U) != 0U)   /* mode.bit2 清故障与 Byte7.bit6 任一为 1 即清 */
@@ -276,6 +276,12 @@ static void sCmd00Run(const uint16_t *d)
     }
     sstBmsData.u16AdiMode       = (mode >> 3) & 0x0001U;
     CfgParam.SysCmd.all = cmd.all;   /* 单次 16 位写，原子生效 */
+
+    /* bit4 upboot=1：进纯 Boot 接收态（关加热膜 + 封波）；满 30s 未跳 Boot 由 BootProto 超时退出 */
+    if ((mode & 0x0010U) != 0U)
+    {
+        BootProto_EnterBootMode();
+    }
 
     /* 当拍同步 SysCmd，同帧 onoff=0+clear=1 时清故障能读到新 shutdown */
     SM_SyncSysCmd();
@@ -308,6 +314,11 @@ uint16_t UartProto_GetPackSum(void)
 uint16_t UartProto_GetHotCmd(void)
 {
     return sstBmsData.u16HotCmd;
+}
+
+void UartProto_ClearHotCmd(void)
+{
+    sstBmsData.u16HotCmd = 0U;
 }
 
 /* 0x00 运行控制 | 0x01~0x04 校准存储 | 0x05 并联/母线设定；其余命令静默丢弃 */
@@ -449,18 +460,29 @@ void UartProto_RxTask(void)
         BootProto_ResetRx();
     }
 
-    /* 硬件 FIFO 逐字节直递：16 字节约 1.39ms 填满，1ms 轮询余量 0.39ms（Task1ms 最坏抖动需实测） */
+    /* 硬件 FIFO 逐字节路由：收到 upboot=1 前只进 AA55 协议，之后只进 Boot 协议，彻底解耦 */
     while (CustomUart_PopRxByte(&byte))
     {
         stUartProto.u32LastRxByteTick = Sys_GetTick1ms();
-        BootProto_RxByte(byte);
-        sRxByte(byte);
+        if (stBootProto.u16BootModeEn != 0U)
+        {
+            BootProto_RxByte(byte);
+        }
+        else
+        {
+            sRxByte(byte);
+        }
     }
 }
 
-/* 5ms：4×5ms 轮发一帧遥测；拼帧/校验/命令执行已全部移到 1ms 直递链 */
+/* 5ms：4×5ms 轮发一帧遥测；升级标志有效期间暂停发送，避免残余业务帧干扰 Boot 握手 */
 void UartProto_Task_5ms(void)
 {
+    if (stBootProto.u16FlashUpdateFlag != 0U)
+    {
+        return;
+    }
+
     stUartProto.u16TelemetryTick++;
     if (stUartProto.u16TelemetryTick >= PROTOCOL_TELEMETRY_DIV)
     {

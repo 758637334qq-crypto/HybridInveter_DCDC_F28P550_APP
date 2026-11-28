@@ -157,8 +157,8 @@ void SM_SyncSysCmd(void)
     SysCmd.bit.forceMode = CfgParam.SysCmd.bit.ReCharForce;  /* 强制方向(0自适应/1强放/2强充) */
     SysCmd.bit.openTest  = CfgParam.SysCmd.bit.openTest;     /* 开环测试模式镜像 */
     SysCmd.bit.shutdown  = (CfgParam.SysCmd.bit.onoffcmd || CfgParam.SysCmd.bit.openTest) ? 1U : 0U;
-    /* shutdown = 开机指令 且 非开环测试。开环测试强制视为"要求停机重走起机流程",
-     * 以便在 INIT→PRECHECK 链路中以测试模式起机(继电器压差检查被旁路)。 */
+    /* shutdown=1：onoffcmd 或 openTest 任一为 1，表示允许运行；两者都为 0 时 shutdown=0，表示要求关机。
+     * openTest=1 也会置 shutdown=1，当作运行请求，好走 INIT→PRECHECK 起机（压差旁路在继电器检查里）。 */
     /* standby 不镜像到 SysCmd：协议 standby 语义已由 SM_STATE_STANDBY 状态承担,
      * 运行侧只认 RunState.state 单一事实源, 避免位域与状态双源打架。 */
 }
@@ -283,15 +283,17 @@ static Uint16 SM_ModeArbitrate_100us(void)
     const Uint16 u16VoltNeed = charging ? SM_N_VOLT_TO_DISCH : SM_VOLT_ACC_FULL;
     /* 当前母线电压(两路 ADC 去工频干扰后的滤波值), 后面判断都用它 */
     const float  vbus        = stADC.VmBusVolt.f32Notch;
+    /* 外环真实电压基准(含均流补偿 voltAdj)：单机等价 RampTarget.v，多机防与均流撞车 */
+    const float  f32Vref     = g_CtrlBusRef_V;
     /* 两路母线电流相加 = 实际总电流(系统约定: 放电为正, 充电为负) */
     const float  iAct        = stADC.BusCurr1.f32IsrResult + stADC.BusCurr2.f32IsrResult;
     float        iRef;   /* 电流给定, 下面从 Bus.f32Ref 取 */
 
-    /* ===== ① 电压通道: 看母线电压偏离设定值多少 ===== */
+    /* ===== ① 电压通道: 看母线电压偏离真实控制基准多少 ===== */
     if (charging != 0U)
     {
-        /* ---- 当前充电: 母线往下掉, 跌破"设定值 - 20V"就开始数票 ---- */
-        if (vbus < (RampTarget.v - SM_V_MODE_BAND))
+        /* ---- 当前充电: 母线往下掉, 跌破"控制基准 - 20V"就开始数票 ---- */
+        if (vbus < (f32Vref - SM_V_MODE_BAND))
         {
             /* 破线了: 票还没数满(3 拍)就再加一拍 */
             if (RunState.voltDebounce < SM_N_VOLT_TO_DISCH)
@@ -308,8 +310,8 @@ static Uint16 SM_ModeArbitrate_100us(void)
     else
     {
         /* ---- 当前放电: 母线往上冲才考虑换充电, 且要求基本没有电流 ---- */
-        /* 电压比设定值高多少(正=偏高, 负=偏低) */
-        const float f32Dv = vbus - RampTarget.v;
+        /* 电压比控制基准高多少(正=偏高, 负=偏低) */
+        const float f32Dv = vbus - f32Vref;
 
         /* 两个条件同时成立才数票: 电压高出设定+10V, 且基本没有放电电流(<0.5A) */
         if ((f32Dv > SM_V_MODE_BAND_LO) && (iAct < SM_EPS_CURR))
@@ -508,7 +510,7 @@ void SM_Standby_100us(void)
  *      a. FAULT_ANY()  —— 任意快/慢/alm 故障字非零;
  *      b. faultcmd     —— 上位机请求进故障停机: 清故障动作仅允许在 INIT
  *                         (Fault_ClearCmd5ms 自读 CfgParam 判门槛), 故先回 INIT;
- *      c. shutdown==0  —— 协议层要求关机(onoffcmd=0 或 openTest=1);
+ *      c. shutdown==0  —— 协议层要求关机(onoffcmd=0 且 openTest=0)；
  *      d. FlashUpdate  —— 升级中保持停机(与 STANDBY 出态/INIT 起机同源);
  *   ③ 故障快照: fast/slow/alm 各自仅在非零时写入 SaveAlarm —— 持续快照"最后
  *      一次非零故障", 不会被后续零值覆盖, 供上位机事后追溯停机原因;
@@ -632,7 +634,7 @@ static void Handle_Precheck(void)
     Uint16 workMode = WORK_MODE_DISCHARGE;               /* 判向结果(初值仅为消警告, ②必覆盖) */
     Uint16 u16Seal;
     float vBus = stADC.VmBusVolt.f32Notch;               /* 继电器 VM 陷波值(与电压环同源) */
-    float f32Vset = (float)CfgParam.BusVolSet * 0.1f;    /* 设定电压(0.1V 定标→V) */
+    float f32Vset = __fmin(__fmax((float)CfgParam.BusVolSet * 0.1f, DAB_VOLT_MIN), DAB_VOLT_MAX); /* 与闭环斜坡同口径限幅 [360V, 450V] */
     float f32Dis;
     float f32Chg;
 

@@ -37,7 +37,7 @@ const TimerTaskBoxStruct constTaskBoxTable[MAX_TASK_NUM] =
 		{Task50ms,          4, 500, 0},
 };
 
-TimerTaskBoxStruct taskBoxTable[MAX_TASK_NUM] =
+volatile TimerTaskBoxStruct taskBoxTable[MAX_TASK_NUM] =
 {
 		{Task100us,  		0, 1,   0},
 		{Task1ms,           1, 10,  0},
@@ -72,17 +72,21 @@ static void sTaskOS_MeasureTimerInit(void)
 
 void OSISREventSend(Uint16 prio,Uint16 EventId)
 {
-    taskBoxTable[prio].u16taskToInvoke|=(1<<EventId);
+    taskBoxTable[prio].u16taskToInvoke |= (Uint16)(1U << EventId);
 }
 
 void OSEventSend(Uint16 prio,Uint16 EventId)
 {
-    taskBoxTable[prio].u16taskToInvoke|=(1<<EventId);
+    uint16_t intm = __disable_interrupts();
+    taskBoxTable[prio].u16taskToInvoke |= (Uint16)(1U << EventId);
+    __restore_interrupts(intm);
 }
 
 void OSISREventClr(Uint16 prio,Uint16 EventId)
 {
-    taskBoxTable[prio].u16taskToInvoke &=(~(1<<EventId));
+    uint16_t intm = __disable_interrupts();
+    taskBoxTable[prio].u16taskToInvoke &= (Uint16)(~(1U << EventId));
+    __restore_interrupts(intm);
 }
 
 Uint16 OSEventConfirm(Uint16 prio, Uint16 EventId)
@@ -184,6 +188,7 @@ __interrupt void OSTimerTick(void)
 	TaskSched_TimeBase100us();	/* P0：维护 TaskSched 对外时基，Sys_GetTick100us/1ms/10ms 恢复有效 */
 
 	u32Tick_Count++;
+	g_u16WdgHbTmr2 = 1U;	/* 看门狗心跳：Timer2 100us 节拍中断存活 */
 
 	DINT;					/* 先关全局中断再恢复 IER，退出前无空窗 */
 	IER = u16SavedIER;

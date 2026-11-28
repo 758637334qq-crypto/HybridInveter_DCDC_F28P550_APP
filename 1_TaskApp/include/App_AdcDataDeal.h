@@ -55,15 +55,15 @@
 #define ADRESULT_MODEL3         DAB_ADC_RESULT(AdccResultRegs, DAB_ADC_C_MODEL3)        /* SOC5 C7  | 机型/配置识别脚 3（未入池） */
 
 /*
- * 1ms 任务一阶低通：y = x*NEW + y*OLD
- * NEW = 1-exp(-Ts/τ)，OLD = exp(-Ts/τ)，Ts = 1ms
+ * 1ms 任务一阶低通：y += NEW * (x - y)（保证稳态直流增益严格为 1）
+ * NEW = 1-exp(-Ts/τ)，OLD = 1-NEW，Ts = 1ms
  */
 #define ADC_DAB_FILT_10MS_NEW    (0.09516f)   /* τ=10ms */
 #define ADC_DAB_FILT_10MS_OLD    (0.90484f)
 #define ADC_DAB_FILT_100MS_NEW   (0.009950f)  /* τ=100ms */
-#define ADC_DAB_FILT_100MS_OLD   (0.99005f)
+#define ADC_DAB_FILT_100MS_OLD   (0.990050f)
 #define ADC_DAB_FILT_400MS_NEW   (0.002497f)  /* τ=400ms */
-#define ADC_DAB_FILT_400MS_OLD   (0.99750f)
+#define ADC_DAB_FILT_400MS_OLD   (0.997503f)
 
 /** 三档一阶低通状态：1ms 任务用同一瞬时值并行推进 */
 typedef struct {

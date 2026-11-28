@@ -8,9 +8,15 @@ Writer:          zy
 
 #include "Includes.h"
 
+/* 浮点饱和转 Int16：防止短路/大功率瞬态超 ±32767 触发未定义行为 */
+static inline Int16 sF32ToI16Sat(float f)
+{
+    return (Int16)__fmin(__fmax(f, -32768.0f), 32767.0f);
+}
+
 /* 浮点工程量 -> 协议定标 */
 #define F_TO_DV(f)   ((Uint16)((f) * 10.0f + 0.5f))   /* V  -> 0.1V  */
-#define F_TO_CA(f)   ((Int16)((f) * 100.0f))           /* A  -> 0.01A */
+#define F_TO_CA(f)   sF32ToI16Sat((f) * 100.0f)        /* A  -> 0.01A */
 
 /**
  * @brief  汇总 ADC 采样、环路控制量、设定/限制、运行状态与告警，写入 g_CanMon
@@ -45,7 +51,7 @@ void Update_CanMon(void)
     /* ----- 环路控制量 ----- */
     /* 两路共用同一个母线电压外环，因此 vLoop1/vLoop2 上报同一组值（×100 → 0.01 单位）。
      * 注意：DAB 外环输出 f32Out 是电流校正量（A），字段名沿用原协议 vLoop_Out。 */
-    g_CanMon.LoopCtrl.vLoop1_Err_cV = (Int16)(Bus.f32Err * 100.0f);   /* 电压误差，0.01V */
+    g_CanMon.LoopCtrl.vLoop1_Err_cV = sF32ToI16Sat(Bus.f32Err * 100.0f);   /* 电压误差，0.01V */
     g_CanMon.LoopCtrl.vLoop1_Out    = (Int16)(Bus.f32Out * 100.0f);   /* 外环输出，0.01 单位 */
     g_CanMon.LoopCtrl.vLoop2_Err_cV = g_CanMon.LoopCtrl.vLoop1_Err_cV;
     g_CanMon.LoopCtrl.vLoop2_Out    = g_CanMon.LoopCtrl.vLoop1_Out;
@@ -56,7 +62,7 @@ void Update_CanMon(void)
     /* 内环误差取电流环保存的上一拍误差 f32Err1（单位 A，×100 → 0.01A） */
     g_CanMon.LoopCtrl.iLoop1_Err_cA = (Int16)(stDabPi0.f32Err1 * 100.0f);
     g_CanMon.LoopCtrl.iLoop2_Err_cA = (Int16)(stDabPi1.f32Err1 * 100.0f);
-    /* 内环输出：充电模式为占空比修正量、放电模式为电流校正量，按 0.01 单位原样上报 */
+    /* 内环输出：充电模式为电流域 PI 输出（A）、放电模式为占空比修正量，按 0.01 单位原样上报 */
     g_CanMon.LoopCtrl.iLoop1_Out    = (Int16)(stDabPi0.f32Out * 100.0f);
     g_CanMon.LoopCtrl.iLoop2_Out    = (Int16)(stDabPi1.f32Out * 100.0f);
     /* 0x09 仍上报两路实际发波占空比，0.01% 定标（1.0 = 10000） */

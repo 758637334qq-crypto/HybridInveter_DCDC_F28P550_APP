@@ -20,7 +20,7 @@ extern "C" {
 /** 协议状态初始化（须在 init_Drv_can / init_global_data 之后） */
 void CanComm_Init(void);
 
-/** UART 分址：撤未发 0x41 → 写 uIndex/bCalIDCmd → ResetPeers */
+/** UART 分址：地址须 ≤recnum；合法则撤未发 0x41 → 写 uIndex/bCalIDCmd → ResetPeers；越界直接返回 */
 void CanComm_SetLocalAddr(uint16_t u16Addr);
 
 /** 1ms：0x41 均流广播 + 0x11 遥测 + 示波器 */

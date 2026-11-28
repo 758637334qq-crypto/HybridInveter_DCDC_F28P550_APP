@@ -20,7 +20,7 @@ Writer:			zy									                                            	*
 
 //defined by link file
 //App请求升级标志位
-extern uint16_t FromAppRequestFlag;
+extern volatile uint16_t FromAppRequestFlag;
 
 extern void InitDSP(void);
 

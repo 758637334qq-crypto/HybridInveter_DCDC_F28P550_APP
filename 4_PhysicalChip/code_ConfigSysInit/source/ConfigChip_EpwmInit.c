@@ -45,7 +45,6 @@ static void SetupBase(volatile struct EPWM_REGS *p, Uint16 selfLink, Uint16 gldM
     p->AQCTLB.all = 0U;
     p->AQSFRC.bit.RLDCSF = 3U;
     p->AQCSFRC.all = 0x0005U;
-    p->AQSFRC.bit.RLDCSF = 0U;
     p->AQCTL.bit.SHDWAQAMODE = 1U;
     p->AQCTL.bit.SHDWAQBMODE = 1U;
 
@@ -132,11 +131,13 @@ static void LoadChargeAq(volatile struct EPWM_REGS *p1,
     p4->AQCTLB.bit.CBD = AQ_CLEAR;
 }
 
+/* 保持 RLDCSF=3（立即模式）强制低，不切回 0：
+ * 防止滞后 90° 的桥 2 已武装 OSHTLD 在 ZERO 时把旧影子 AQCSFRC(0x0000/0x0001) 重新装入解封；
+ * 下次真正发波时由 Dab_Pwm_Commit() 在 u16Phase==0 下统一切回 RLDCSF=0 并重写影子。 */
 static void ForceSoftOff(volatile struct EPWM_REGS *p)
 {
     p->AQSFRC.bit.RLDCSF = 3U;
     p->AQCSFRC.all = 0x0005U;
-    p->AQSFRC.bit.RLDCSF = 0U;
 }
 
 /* 入参 prd = 完整载波周期 TBPRD（up-down 模式：一个载波周期 = 2×prd 个计数）
@@ -177,6 +178,8 @@ static void ApplySyncPhase(Uint16 prd)
 /*------------------------------------------------------------------------------------------------*/
 void DAB_PWM_Stop(void)
 {
+    uint16_t intm = __disable_interrupts();
+
     ForceSoftOff(&DabEpwm1Regs);
     ForceSoftOff(&DabEpwm2Regs);
     ForceSoftOff(&DabEpwm3Regs);
@@ -185,13 +188,17 @@ void DAB_PWM_Stop(void)
     ForceSoftOff(&DabEpwm2bRegs);
     ForceSoftOff(&DabEpwm3bRegs);
     ForceSoftOff(&DabEpwm4bRegs);
+
+    /* 同步作废两桥 AQ 动作缓存与相位，保证下次发波经 Dab_Pwm_Commit() 重新切回 RLDCSF=0 */
+    g_stDabIsrState.stChgAqBr1.all = DAB_PWM_STATE_RESET;
+    g_stDabIsrState.stChgAqBr2.all = DAB_PWM_STATE_RESET;
+
+    __restore_interrupts(intm);
 }
 
 void DAB_PWM_OstStop(void)
 {
     uint16_t intm = __disable_interrupts();
-
-    DAB_EPWM_MASTER_REGS.ETSEL.bit.INTEN = 0U;
 
     EALLOW;
     DabEpwm1Regs.TZFRC.bit.OST = 1U;
@@ -204,25 +211,22 @@ void DAB_PWM_OstStop(void)
     DabEpwm4bRegs.TZFRC.bit.OST = 1U;
     EDIS;
 
-    DAB_EPWM_MASTER_REGS.ETCLR.bit.INT = 1U;
-    PieCtrlRegs.PIEIFR3.bit.INTx10 = 0U;   /* EPWM10_INT = 3.10 */
-    PieCtrlRegs.PIEACK.all = PIEACK_GROUP3;
-
-    DAB_EPWM_MASTER_REGS.ETSEL.bit.INTEN = 1U;
     __restore_interrupts(intm);
 }
 
 void DAB_PWM_Start(void)
 {
+    const Uint16 u16Clr = (Uint16)(EPWM_TZ_FLAG_OST | EPWM_TZ_FLAG_DCAEVT1);
+
     EALLOW;
-    DabEpwm1Regs.TZCLR.bit.OST = 1U;
-    DabEpwm2Regs.TZCLR.bit.OST = 1U;
-    DabEpwm3Regs.TZCLR.bit.OST = 1U;
-    DabEpwm4Regs.TZCLR.bit.OST = 1U;
-    DabEpwm1bRegs.TZCLR.bit.OST = 1U;
-    DabEpwm2bRegs.TZCLR.bit.OST = 1U;
-    DabEpwm3bRegs.TZCLR.bit.OST = 1U;
-    DabEpwm4bRegs.TZCLR.bit.OST = 1U;
+    DabEpwm1Regs.TZCLR.all  = u16Clr;
+    DabEpwm2Regs.TZCLR.all  = u16Clr;
+    DabEpwm3Regs.TZCLR.all  = u16Clr;
+    DabEpwm4Regs.TZCLR.all  = u16Clr;
+    DabEpwm1bRegs.TZCLR.all = u16Clr;
+    DabEpwm2bRegs.TZCLR.all = u16Clr;
+    DabEpwm3bRegs.TZCLR.all = u16Clr;
+    DabEpwm4bRegs.TZCLR.all = u16Clr;
     EDIS;
 }
 
@@ -256,37 +260,10 @@ void DAB_PWM_SetMode(Uint16 workMode)
     g_u16DabPwmTicks100us = (prd == DAB_CHG_TBPRD) ? 5U : 6U;
     ApplySyncPhase(prd);
 
-    /* AQ 模板写桥1，再镜像到桥2（两桥各自 GLD，不跨桥硬链） */
+    /* AQ 模板：充电复用完整 LoadChargeAq，再镜像桥2；放电只清充电残留开通沿，发波由 DisUpdate 重写 */
     if (workMode == (Uint16)WORK_MODE_CHARGE)
     {
-        DabEpwm1Regs.AQCTLA.bit.ZRO = AQ_SET;
-        DabEpwm1Regs.AQCTLA.bit.PRD = AQ_CLEAR;
-        DabEpwm1Regs.AQCTLA.bit.CAU = AQ_CLEAR;
-        DabEpwm1Regs.AQCTLA.bit.CAD = AQ_CLEAR;
-
-        DabEpwm1Regs.AQCTLB.bit.ZRO = AQ_CLEAR;
-        DabEpwm1Regs.AQCTLB.bit.PRD = AQ_SET;
-        DabEpwm1Regs.AQCTLB.bit.CBU = AQ_CLEAR;
-        DabEpwm1Regs.AQCTLB.bit.CBD = AQ_CLEAR;
-
-        DabEpwm2Regs.AQCTLA.bit.PRD = AQ_SET;
-        DabEpwm2Regs.AQCTLA.bit.CAU = AQ_CLEAR;
-        DabEpwm2Regs.AQCTLA.bit.CAD = AQ_CLEAR;
-
-        DabEpwm2Regs.AQCTLB.bit.ZRO = AQ_SET;
-        DabEpwm2Regs.AQCTLB.bit.PRD = AQ_CLEAR;
-        DabEpwm2Regs.AQCTLB.bit.CBU = AQ_CLEAR;
-        DabEpwm2Regs.AQCTLB.bit.CBD = AQ_CLEAR;
-
-        DabEpwm3Regs.AQCTLA.bit.ZRO = AQ_SET;
-        DabEpwm3Regs.AQCTLA.bit.CAD = AQ_CLEAR;
-        DabEpwm3Regs.AQCTLB.bit.PRD = AQ_SET;
-        DabEpwm3Regs.AQCTLB.bit.CBU = AQ_CLEAR;
-
-        DabEpwm4Regs.AQCTLA.bit.PRD = AQ_SET;
-        DabEpwm4Regs.AQCTLA.bit.CAU = AQ_CLEAR;
-        DabEpwm4Regs.AQCTLB.bit.ZRO = AQ_SET;
-        DabEpwm4Regs.AQCTLB.bit.CBD = AQ_CLEAR;
+        LoadChargeAq(&DabEpwm1Regs, &DabEpwm2Regs, &DabEpwm3Regs, &DabEpwm4Regs);
     }
     else
     {
@@ -359,7 +336,7 @@ void DAB_PWM_Init(void)
 
     DAB_EPWM_MASTER_REGS.ETSEL.bit.INTSEL = ET_CTR_ZERO;
     DAB_EPWM_MASTER_REGS.ETPS.bit.INTPRD = ET_1ST;
-    DAB_EPWM_MASTER_REGS.ETSEL.bit.INTEN = 1U;
+    DAB_EPWM_MASTER_REGS.ETSEL.bit.INTEN = 0U;   /* 留到 main() EINT 前开启，防校准期间挂起 */
 
     /* 双 ADC 触发：桥1@EPWM10 PRD、桥2@EPWM7 PRD（交错 90°） */
     DAB_EPWM_MASTER_REGS.ETSEL.bit.SOCASEL = ET_CTR_PRD;

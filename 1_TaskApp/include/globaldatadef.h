@@ -51,10 +51,10 @@ typedef int16_t Int16;
 
 typedef struct
 {
-    int16  uDataScope0[SCOPENUM];   /* 通道 0：Ramp.iPos  ×10 */
-    int16  uDataScope1[SCOPENUM];   /* 通道 1：Ramp.iNeg  ×10 */
-    int16  uDataScope2[SCOPENUM];   /* 通道 2：Bus.f32Ref ×10 */
-    int16  uDataScope3[SCOPENUM];   /* 通道 3：Ramp.v     ×10 */
+    int16  uDataScope0[SCOPENUM];   /* 通道 0：BusCurr1 ×10 */
+    int16  uDataScope1[SCOPENUM];   /* 通道 1：BusCurr2 ×10 */
+    int16  uDataScope2[SCOPENUM];   /* 通道 2：BusVolt1 ×10 */
+    int16  uDataScope3[SCOPENUM];   /* 通道 3：BusVolt2 ×10 */
     Uint16 uCurrent_Save_subscript; /* 录波写入下标：触发后线性递增，到 SCOPENUM 锁定 */
     Uint16 uCurrent_Tran_subscript; /* 上传点序 0~SCOPENUM-1：CAN 任务按 TXBTO 推进；点序→槽位映射见 CanComm_SendScope */
     Uint16 uTran_CMD;               /* 0=预触发环形记录；1=已触发/锁定，存满后待上传 */

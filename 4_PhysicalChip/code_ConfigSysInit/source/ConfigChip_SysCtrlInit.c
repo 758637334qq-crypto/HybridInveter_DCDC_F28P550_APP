@@ -75,6 +75,11 @@ void InitChip_SysCtrlRegs(void)
 #error "Select a PLL source in device.h"
 #endif
 
+    /* LSPCLK = SYSCLK/4 = 37.5MHz，与 device.h 的 DEVICE_LSPCLK_FREQ 一致（SCI/SPI 波特依赖） */
+    EALLOW;
+    ClkCfgRegs.LOSPCP.bit.LSPCLKDIV = 2U;   /* 2 → ÷4（复位默认值，此处显式锁定） */
+    EDIS;
+
 #ifndef _FLASH
     //
     // Call Device_cal function when run using debugger
@@ -90,6 +95,45 @@ void InitChip_SysCtrlRegs(void)
 	// Initialize the peripheral clocks
 	//InitPeripheralClocks();    //from SDK
 	InitPeripheralClocks_User();
+
+    /* REVID==1 硅片 ADC/PGA 勘误（对齐 TI device.c Device_init）：须在外设时钟使能之后 */
+    if (HWREG(DEVCFG_BASE + SYSCTL_O_REVID) == 1U)
+    {
+        PGA_setOffsetTrimNMOS(PGA2_BASE);
+        PGA_setOffsetTrimPMOS(PGA2_BASE);
+
+        EALLOW;
+        HWREG(ADCA_BASE + 0x66U) |= 0x00000C00U;
+        HWREG(ADCB_BASE + 0x66U) |= 0x00000C00U;
+        HWREG(ADCC_BASE + 0x66U) |= 0x00000C00U;
+        HWREG(ADCD_BASE + 0x66U) |= 0x00000C00U;
+        HWREG(ADCE_BASE + 0x66U) |= 0x00000C00U;
+
+        if ((HWREGH(ADCA_BASE + ADC_O_OFFTRIM) % 2U) != 0U)
+        {
+            HWREGH(ADCA_BASE + ADC_O_OFFTRIM) += 1U;
+        }
+        if ((HWREGH(ADCB_BASE + ADC_O_OFFTRIM) % 2U) != 0U)
+        {
+            HWREGH(ADCB_BASE + ADC_O_OFFTRIM) += 1U;
+        }
+        if ((HWREGH(ADCC_BASE + ADC_O_OFFTRIM) % 2U) != 0U)
+        {
+            HWREGH(ADCC_BASE + ADC_O_OFFTRIM) += 1U;
+        }
+        if ((HWREGH(ADCD_BASE + ADC_O_OFFTRIM) % 2U) != 0U)
+        {
+            HWREGH(ADCD_BASE + ADC_O_OFFTRIM) += 1U;
+        }
+        if ((HWREGH(ADCE_BASE + ADC_O_OFFTRIM) % 2U) != 0U)
+        {
+            HWREGH(ADCE_BASE + ADC_O_OFFTRIM) += 1U;
+        }
+        EDIS;
+    }
+
+    /* 本芯片不支持 VREGCTL，锁寄存器防误写（对齐 TI device.c） */
+    ASysCtl_lockVREG();
 }
 
 //--------------------------------------------------------------------------

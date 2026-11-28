@@ -113,8 +113,8 @@ typedef struct
  *============================================================================*/
 extern volatile ST_DAB_PARAM stDabParam;
 extern volatile ST_DAB_BUS   Bus;
-extern ST_DAB_PI             stDabPi0, stDabPi1;
-extern ST_DAB_DUTY           stDabDuty0, stDabDuty1;
+extern volatile ST_DAB_PI    stDabPi0, stDabPi1;
+extern volatile ST_DAB_DUTY  stDabDuty0, stDabDuty1;
 
 extern volatile ST_DAB_RAMP  Ramp;                     /* 当前电压给定 / 放电限 / 充电限（ISR 读） */
 extern ST_DAB_RAMP           RampTarget;               /* 终点，供 Ctrl_RampDone 与均流 Iset（任务侧） */

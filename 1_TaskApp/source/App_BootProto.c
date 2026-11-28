@@ -15,14 +15,14 @@
 *   - 跳转（原始 Task_Status.PVBoostFlashMode）：
 *       FlashReady 持续 2s（v102：SuperTask 10ms 节拍内数 200×10ms=2s）→ 封波 → FromAppRequestFlag=0x55AA
 *       → asm MOV SP,#0 → asm LB 0x080000（直接跳 Boot 入口，不返回）；
-*   - 升级取消（帧[9]=0）后不自动恢复 PWM：升级链路结束后由整机重启/状态机恢复，
-*     避免升级过程半途开波。
+*   - 升级取消（帧[9]=0）只撤 FlashReady，不解封；满 30s 未跳 Boot 才退出接收态并清
+*     UpdateFlag（OST 仍由状态机保留，须再走起机，避免半途开波）。
 ***********************************************************************************/
 
 #include "Includes.h"
 
 /* FromAppRequestFlag 由 cmd 定址在 0x128（28p55x_cla_flash_lnk.cmd），Boot 阶段读取 */
-extern uint16_t FromAppRequestFlag;
+extern volatile uint16_t FromAppRequestFlag;
 
 #define BOOT_ST_WAIT_ADDR           (0U)                        /* 等帧头地址 */
 #define BOOT_ST_WAIT_FUNC           (1U)                        /* 等功能码 */
@@ -31,12 +31,44 @@ extern uint16_t FromAppRequestFlag;
 ST_BOOT_PROTO_CTRL stBootProto;
 
 /*------------------------------------------------------------------------------
+* FUNCION :  BootProto_ExitBootMode()
+* PURPOSE :  退出纯 Boot 接收态：恢复 AA55 路由；清升级/跳转标志与残留加热命令。
+*            不自动解 OST——须上位机再起机；加热膜须等新 0x00 帧再开，防失联自动复开。
+*------------------------------------------------------------------------------*/
+static void BootProto_ExitBootMode(void)
+{
+    BootProto_ResetRx();
+    stBootProto.u16BootModeEn      = 0U;
+    stBootProto.u16FlashUpdateFlag = 0U;
+    stBootProto.u16FlashReady      = 0U;
+    stBootProto.u16ReadyCnt        = 0U;
+    stBootProto.u16BootModeCnt     = 0U;
+    stBootProto.u16LastCmd         = 0U;
+    stBootProto.u16CmdRepeat       = 0U;
+    UartProto_ClearHotCmd();
+    HeatFilm_Off();
+}
+
+/*------------------------------------------------------------------------------
 * FUNCION :  BootProto_Init()
 * PURPOSE :  清状态机/标志（字节由 UartProto_RxTask 直递，无需挂接）
 *------------------------------------------------------------------------------*/
 void BootProto_Init(void)
 {
     memset(&stBootProto, 0, sizeof(stBootProto));
+}
+
+/* 收到合法 AA55 0x00 且 mode.bit4(upboot)=1：锁定纯 Boot 接收态，清加热命令并关加热膜，当拍置升级封波标志 */
+void BootProto_EnterBootMode(void)
+{
+    BootProto_ResetRx();
+    stBootProto.u16LastCmd         = 0U;
+    stBootProto.u16CmdRepeat       = 0U;
+    stBootProto.u16BootModeCnt     = 0U;
+    stBootProto.u16BootModeEn      = 1U;
+    stBootProto.u16FlashUpdateFlag = 1U;
+    UartProto_ClearHotCmd();            /* 清旧加热命令，防止 30s 超时退出后在无通信下自动复开 */
+    HeatFilm_Off();                     /* 进 Boot 当拍关加热膜；Task 在 Boot 态持续保持关断 */
 }
 
 /*------------------------------------------------------------------------------
@@ -58,6 +90,11 @@ void BootProto_ResetRx(void)
 *------------------------------------------------------------------------------*/
 void BootProto_Task_Rx(void)
 {
+    if (stBootProto.u16BootModeEn == 0U)
+    {
+        return;
+    }
+
     if (stBootProto.u16State != BOOT_ST_WAIT_ADDR)
     {
         stBootProto.u16SilenceCnt++;
@@ -158,8 +195,8 @@ void BootProto_RxByte(uint16_t byte)
                         }
                         else
                         {
-                            stBootProto.u16FlashUpdateFlag = 0U;
-                            stBootProto.u16FlashReady      = 0U;
+                            /* 已进入纯 Boot 模式时保持 u16FlashUpdateFlag=1 不解封，只撤跳转就绪 */
+                            stBootProto.u16FlashReady = 0U;
                         }
                     }
 
@@ -176,6 +213,7 @@ void BootProto_RxByte(uint16_t byte)
 *               ISR 见升级标志每拍 seal；SM_StopReq 纳入停机四触发后 OstStop 锁存；
 *               非 RUN 后退回 INIT 后仍由 ISR ① 门封波（对齐 v102 cPV_FlashStatus）
 *            2) FlashReady 持续 2s 确认（对齐 v102：200×10ms）→ 封波兜底 → 0x55AA + MOV SP,#0 + LB 0x080000 跳 Boot
+*            3) 进 Boot 接收态满 30s 仍未跳转 → ExitBootMode，恢复 AA55（不解 OST）
 *------------------------------------------------------------------------------*/
 void BootProto_Task_1ms(void)
 {
@@ -216,5 +254,21 @@ void BootProto_Task_1ms(void)
     else
     {
         stBootProto.u16ReadyCnt = 0U;       /* Ready 撤销：确认计数清零 */
+    }
+
+    /* 30s 未跳 Boot：退出纯 Boot 接收态（跳转成功则上面 LB 不返回，不会走到这里）。
+     * FlashReady=1 时不计时：确认跳转要 2s，若升级命令在最后 2s 才到，
+     * 超时会清掉 Ready 计数、打断已确认的跳转。确认期间冻结计数即可，
+     * ARM 撤销（cmd 变 0）清 Ready 后计时从冻结值继续，不会永久卡在接收态。 */
+    if ((stBootProto.u16BootModeEn != 0U) && (stBootProto.u16FlashReady == 0U))
+    {
+        if (stBootProto.u16BootModeCnt < 0xFFFFU)
+        {
+            stBootProto.u16BootModeCnt++;
+        }
+        if (stBootProto.u16BootModeCnt >= BOOT_PROTO_MODE_TIMEOUT_1MS)
+        {
+            BootProto_ExitBootMode();
+        }
     }
 }

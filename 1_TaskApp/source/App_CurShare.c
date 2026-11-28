@@ -17,7 +17,7 @@
 /*------------------------------------------------------------------------------
  * 参数
  *----------------------------------------------------------------------------*/
-/* 分段下垂（有符号电流，放正充负），限幅 ±8V；慢 trim 仍 ±10V
+/* 分段下垂（有符号电流，放正充负），限幅 ±8V；慢 trim 限幅 ±4V（弱于下垂防打架）
  *   |I|≤10A：Rd1=0.20 → 10A 时 2V（柔和，少互抢）
  *   10~20A：Rd2=0.60 → 再爬 6V，20A 满 8V（大功率快均流）
  *   折线连续：V(10)=Rd1·10，V(I)=V(10)+Rd2·(I-10) */
@@ -28,7 +28,7 @@
 /* trim：I 环 @200ms；|err| 大时等效 Ki 加大（非线性积分，非经典 P） */
 #define CUR_SHARE_TRIM_KI           (0.08f)     /* V/A / 200ms（0.08=0.04×2，保持原积分速率） */
 #define CUR_SHARE_TRIM_KI_BOOST     (0.004f)    /* V/A²：×|err| */
-#define CUR_SHARE_TRIM_MAX_V        (10.0f)     /* 电压修正 ±10V */
+#define CUR_SHARE_TRIM_MAX_V        (4.0f)      /* 电压修正 ±4V */
 #define CUR_SHARE_I_MAX             (20.0f)
 #define CUR_SHARE_ADJ_STEP_V        (0.05f)     /* V/1ms */
 #define CUR_SHARE_AVER_DIV          (4U)        /* 50ms×4 = 200ms 均流窗口 */
@@ -58,15 +58,24 @@ static float CurShare_LocalIsetPos(void)
     return (x < 0.0f) ? -x : x;
 }
 
+/** 1=处于 RUN 且允许运行、无故障（非此态时须立即硬复位均流补偿） */
+static uint16_t CurShare_IsRunOnline(void)
+{
+    return (uint16_t)((RunState.state == SM_STATE_RUN) &&
+                      (SysCmd.bit.shutdown != 0U) &&
+                      !FAULT_ANY() &&
+                      (CfgParam.SysCmd.bit.faultcmd == 0U));
+}
+
 /** 1=可均流控制：RUN + 允许运行 + 非换向 + 充/放合法且未禁该向 */
 static uint16_t CurShare_CanRun(void)
 {
     Uint16 mode = RunState.workMode;
     Uint16 seal = RunState.curLowSealing;
 
-    /* ★ 均流参与判据同步实际封波，充电还需通过 PWM 发波门。 */
-    if ((RunState.state != SM_STATE_RUN) || (SysCmd.bit.shutdown == 0U) ||
-        FAULT_ANY() || (CfgParam.SysCmd.bit.faultcmd != 0U))
+    /* ★ 充电绑定迟滞能力锁存 u16ChgBuckOn（而非单拍 u16ChgPwmActive）：
+     *   轻载跳脉冲/打嗝期间仍保持在线均流，与放电侧对称，避免无斜率阶跃清零。 */
+    if (CurShare_IsRunOnline() == 0U)
     {
         return 0U;
     }
@@ -75,7 +84,7 @@ static uint16_t CurShare_CanRun(void)
         return 1U;
     }
     if ((mode == WORK_MODE_CHARGE) && ((seal & SM_SEAL_NO_CHARGE) == 0U) &&
-        (g_stDabIsrState.u16ChgPwmActive != 0U))
+        (g_stDabIsrState.u16ChgBuckOn != 0U))
     {
         return 1U;
     }
@@ -323,7 +332,17 @@ static void CurShare_AverCal(void)
 
     if (CurShare_CanRun() == 0U)
     {
-        CurShare_ResetComp();
+        if (CurShare_IsRunOnline() == 0U)
+        {
+            CurShare_ResetComp();
+        }
+        else
+        {
+            /* 仍在 RUN（如充电 Buck 能力暂退或方向暂封）：只清目标与台数，由 1ms 斜坡平滑退零 */
+            CurShare.trim       = 0.0f;
+            CurShare.workCount  = 0U;
+            uMdlAddMes.fAverCur = 0.0f;
+        }
         return;
     }
 
@@ -424,17 +443,26 @@ void CurShare_Update1ms(float f32AdjMin, float f32AdjMax)
     float trimMin;
     float trimMax;
 
-    if (CurShare_CanRun() == 0U)
+    if (CurShare_IsRunOnline() == 0U)
     {
         CurShare_ResetComp();
         return;
     }
 
-    ibus = stADC.BusCurr1.f32IsrResult + stADC.BusCurr2.f32IsrResult;
-    /* ★ 只在有同向工作对端时下垂，最后一台退出后按原斜率回零。 */
-    if (CurShare.workCount > 1U)
+    if (CurShare_CanRun() == 0U)
     {
-        droopTgt = CurShare_DroopFromI(ibus);
+        /* RUN 内暂退（如 Buck 能力 < 0.7A 或方向暂封）：目标归零，走下方斜坡平滑退零，不清 workCount */
+        CurShare.trim       = 0.0f;
+        uMdlAddMes.fAverCur = 0.0f;
+    }
+    else
+    {
+        ibus = stADC.BusCurr1.Filt.f32Filt10ms + stADC.BusCurr2.Filt.f32Filt10ms;
+        /* ★ 只在有同向工作对端时下垂，最后一台退出后按原斜率回零。 */
+        if (CurShare.workCount > 1U)
+        {
+            droopTgt = CurShare_DroopFromI(ibus);
+        }
     }
 
     /* voltAdj≈−droop（trim=0 时）→ droop 允许区间是 Adj 的镜像 */
